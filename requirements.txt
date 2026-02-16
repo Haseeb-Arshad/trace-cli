@@ -1,0 +1,4 @@
+pywin32>=306
+rich>=13.0
+click>=8.1
+psutil>=5.9
