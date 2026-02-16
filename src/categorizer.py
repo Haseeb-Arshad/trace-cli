@@ -259,3 +259,104 @@ def get_category_emoji(category: str) -> str:
     if category and len(category) >= 2:
         return category.split(" ")[0]
     return "❓"
+
+
+# ── App Role Descriptions ─────────────────────────────────────────────────
+
+APP_ROLES = {
+    # Development
+    "code.exe": "Text Editor & IDE (Visual Studio Code)",
+    "code - insiders.exe": "Text Editor & IDE (VS Code Insiders)",
+    "idea64.exe": "Java/Kotlin IDE (IntelliJ IDEA)",
+    "pycharm64.exe": "Python IDE (PyCharm)",
+    "webstorm64.exe": "JavaScript IDE (WebStorm)",
+    "devenv.exe": "IDE (Visual Studio)",
+    "sublime_text.exe": "Text Editor (Sublime Text)",
+    "notepad++.exe": "Text Editor (Notepad++)",
+    "vim.exe": "Terminal Text Editor (Vim)",
+    "nvim.exe": "Terminal Text Editor (Neovim)",
+    "windowsterminal.exe": "Terminal Emulator (Windows Terminal)",
+    "wt.exe": "Terminal Emulator (Windows Terminal)",
+    "powershell.exe": "Command Shell (PowerShell)",
+    "pwsh.exe": "Command Shell (PowerShell Core)",
+    "cmd.exe": "Command Shell (Command Prompt)",
+    "mintty.exe": "Terminal Emulator (Git Bash)",
+    "postman.exe": "API Testing Tool (Postman)",
+    "insomnia.exe": "API Testing Tool (Insomnia)",
+    "docker desktop.exe": "Container Platform (Docker)",
+    "gitkraken.exe": "Git GUI Client (GitKraken)",
+    "gitextensions.exe": "Git GUI Client (Git Extensions)",
+    # Browsers
+    "chrome.exe": "Web Browser (Google Chrome)",
+    "msedge.exe": "Web Browser (Microsoft Edge)",
+    "firefox.exe": "Web Browser (Mozilla Firefox)",
+    "brave.exe": "Web Browser (Brave)",
+    "opera.exe": "Web Browser (Opera)",
+    "vivaldi.exe": "Web Browser (Vivaldi)",
+    "arc.exe": "Web Browser (Arc)",
+    # Communication
+    "slack.exe": "Team Messaging (Slack)",
+    "discord.exe": "Chat & Voice (Discord)",
+    "teams.exe": "Team Collaboration (Microsoft Teams)",
+    "zoom.exe": "Video Conferencing (Zoom)",
+    "skype.exe": "Voice & Video Calls (Skype)",
+    "telegram.exe": "Messaging App (Telegram)",
+    "thunderbird.exe": "Email Client (Thunderbird)",
+    "outlook.exe": "Email & Calendar (Outlook)",
+    # Productivity
+    "winword.exe": "Word Processor (Microsoft Word)",
+    "excel.exe": "Spreadsheet (Microsoft Excel)",
+    "powerpnt.exe": "Presentations (Microsoft PowerPoint)",
+    "onenote.exe": "Note-Taking (OneNote)",
+    "notion.exe": "Workspace & Notes (Notion)",
+    "obsidian.exe": "Knowledge Base (Obsidian)",
+    "figma.exe": "UI/UX Design (Figma)",
+    "acrobat.exe": "PDF Editor (Adobe Acrobat)",
+    # Media
+    "spotify.exe": "Music Streaming (Spotify)",
+    "vlc.exe": "Media Player (VLC)",
+    # System
+    "explorer.exe": "File Manager (Windows Explorer)",
+    "taskmgr.exe": "System Monitor (Task Manager)",
+    "mmc.exe": "System Administration Console",
+    "regedit.exe": "Registry Editor",
+    "svchost.exe": "Windows Service Host",
+    "csrss.exe": "Windows Runtime Process",
+    "dwm.exe": "Desktop Window Manager",
+    "searchhost.exe": "Windows Search Indexer",
+    "runtimebroker.exe": "Windows Runtime Broker",
+    "systemsettings.exe": "Windows Settings",
+}
+
+
+def get_app_role(app_name: str) -> str:
+    """
+    Get a human-readable description of an application's role.
+
+    Args:
+        app_name: Process name (e.g., "chrome.exe")
+
+    Returns:
+        Role description string, or generic description if unknown.
+    """
+    app_lower = app_name.lower().strip()
+
+    if app_lower in APP_ROLES:
+        return APP_ROLES[app_lower]
+
+    # Infer from category
+    if app_lower in DEV_PROCESSES:
+        return "Development Tool"
+    if app_lower in BROWSER_PROCESSES:
+        return "Web Browser"
+    if app_lower in COMMUNICATION_PROCESSES:
+        return "Communication App"
+    if app_lower in PRODUCTIVITY_PROCESSES:
+        return "Productivity App"
+    if app_lower in DISTRACTION_PROCESSES:
+        return "Entertainment / Media"
+
+    # Check for common Windows system processes
+    if app_lower.endswith(".exe"):
+        return "Application"
+    return "Unknown Process"

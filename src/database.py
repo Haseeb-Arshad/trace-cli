@@ -55,6 +55,7 @@ def close_connection():
 # ── Schema ─────────────────────────────────────────────────────────────────
 
 SCHEMA_SQL = """
+-- Core activity tracking (enriched with resource data)
 CREATE TABLE IF NOT EXISTS activity_log (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     app_name        TEXT    NOT NULL,
@@ -62,9 +63,13 @@ CREATE TABLE IF NOT EXISTS activity_log (
     start_time      TEXT    NOT NULL,
     end_time        TEXT    NOT NULL,
     duration_seconds REAL   NOT NULL,
-    category        TEXT    NOT NULL DEFAULT 'Other'
+    category        TEXT    NOT NULL DEFAULT 'Other',
+    memory_mb       REAL    DEFAULT 0,
+    cpu_percent     REAL    DEFAULT 0,
+    pid             INTEGER DEFAULT 0
 );
 
+-- Search query extraction
 CREATE TABLE IF NOT EXISTS search_history (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp   TEXT    NOT NULL,
@@ -74,6 +79,7 @@ CREATE TABLE IF NOT EXISTS search_history (
     source      TEXT    NOT NULL DEFAULT 'Unknown'
 );
 
+-- Daily productivity summary
 CREATE TABLE IF NOT EXISTS daily_stats (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     date                TEXT    NOT NULL UNIQUE,
@@ -85,10 +91,60 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     session_count       INTEGER NOT NULL DEFAULT 0
 );
 
+-- System-wide process snapshots (every ~30s)
+CREATE TABLE IF NOT EXISTS process_snapshots (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT    NOT NULL,
+    app_name    TEXT    NOT NULL,
+    pid         INTEGER NOT NULL,
+    memory_mb   REAL    NOT NULL DEFAULT 0,
+    cpu_percent REAL    NOT NULL DEFAULT 0,
+    status      TEXT    NOT NULL DEFAULT 'running',
+    num_threads INTEGER NOT NULL DEFAULT 0
+);
+
+-- Per-app daily aggregate analytics
+CREATE TABLE IF NOT EXISTS app_usage_history (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    date                TEXT    NOT NULL,
+    app_name            TEXT    NOT NULL,
+    total_duration      REAL    NOT NULL DEFAULT 0,
+    total_memory_avg_mb REAL    NOT NULL DEFAULT 0,
+    total_cpu_avg       REAL    NOT NULL DEFAULT 0,
+    launch_count        INTEGER NOT NULL DEFAULT 0,
+    category            TEXT    NOT NULL DEFAULT 'Other',
+    role                TEXT    NOT NULL DEFAULT '',
+    UNIQUE(date, app_name)
+);
+
+-- Full browser URL history
+CREATE TABLE IF NOT EXISTS browser_urls (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp       TEXT    NOT NULL,
+    browser         TEXT    NOT NULL,
+    url             TEXT    NOT NULL,
+    title           TEXT    NOT NULL DEFAULT '',
+    visit_duration  REAL    NOT NULL DEFAULT 0,
+    domain          TEXT    NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_activity_start ON activity_log(start_time);
 CREATE INDEX IF NOT EXISTS idx_activity_category ON activity_log(category);
+CREATE INDEX IF NOT EXISTS idx_activity_app ON activity_log(app_name);
 CREATE INDEX IF NOT EXISTS idx_search_timestamp ON search_history(timestamp);
 CREATE INDEX IF NOT EXISTS idx_daily_date ON daily_stats(date);
+CREATE INDEX IF NOT EXISTS idx_snapshot_timestamp ON process_snapshots(timestamp);
+CREATE INDEX IF NOT EXISTS idx_snapshot_app ON process_snapshots(app_name);
+CREATE INDEX IF NOT EXISTS idx_app_usage_date ON app_usage_history(date);
+CREATE INDEX IF NOT EXISTS idx_app_usage_name ON app_usage_history(app_name);
+CREATE INDEX IF NOT EXISTS idx_browser_urls_timestamp ON browser_urls(timestamp);
+CREATE INDEX IF NOT EXISTS idx_browser_urls_domain ON browser_urls(domain);
+"""
+
+# Migration SQL for existing databases (adds new columns safely)
+MIGRATION_SQL = """
+-- Add memory/cpu/pid columns to activity_log if they don't exist
+-- SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we use a try/except in code
 """
 
 
@@ -96,6 +152,18 @@ def init_db():
     """Initialize the database schema. Safe to call multiple times."""
     conn = get_connection()
     conn.executescript(SCHEMA_SQL)
+
+    # Migrate existing activity_log table (add new columns if missing)
+    for col, col_type, default in [
+        ("memory_mb", "REAL", "0"),
+        ("cpu_percent", "REAL", "0"),
+        ("pid", "INTEGER", "0"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE activity_log ADD COLUMN {col} {col_type} DEFAULT {default}")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
     conn.commit()
 
 
@@ -108,14 +176,18 @@ def insert_activity(
     end_time: datetime,
     duration_seconds: float,
     category: str = "Other",
+    memory_mb: float = 0.0,
+    cpu_percent: float = 0.0,
+    pid: int = 0,
 ):
     """Insert an activity record into the log."""
     conn = get_connection()
     conn.execute(
         """
         INSERT INTO activity_log
-            (app_name, window_title, start_time, end_time, duration_seconds, category)
-        VALUES (?, ?, ?, ?, ?, ?)
+            (app_name, window_title, start_time, end_time, duration_seconds,
+             category, memory_mb, cpu_percent, pid)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             app_name,
@@ -124,6 +196,9 @@ def insert_activity(
             end_time.isoformat(),
             round(duration_seconds, 2),
             category,
+            round(memory_mb, 2),
+            round(cpu_percent, 2),
+            pid,
         ),
     )
     conn.commit()
@@ -148,16 +223,90 @@ def insert_search(
     conn.commit()
 
 
+def insert_process_snapshot(
+    timestamp: datetime,
+    app_name: str,
+    pid: int,
+    memory_mb: float,
+    cpu_percent: float,
+    status: str = "running",
+    num_threads: int = 0,
+):
+    """Insert a process snapshot record."""
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO process_snapshots
+            (timestamp, app_name, pid, memory_mb, cpu_percent, status, num_threads)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            timestamp.isoformat(),
+            app_name,
+            pid,
+            round(memory_mb, 2),
+            round(cpu_percent, 2),
+            status,
+            num_threads,
+        ),
+    )
+    conn.commit()
+
+
+def bulk_insert_snapshots(snapshots: list[tuple]):
+    """Insert multiple process snapshots at once for efficiency."""
+    conn = get_connection()
+    conn.executemany(
+        """
+        INSERT INTO process_snapshots
+            (timestamp, app_name, pid, memory_mb, cpu_percent, status, num_threads)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        snapshots,
+    )
+    conn.commit()
+
+
+def insert_browser_url(
+    timestamp: datetime,
+    browser: str,
+    url: str,
+    title: str = "",
+    visit_duration: float = 0.0,
+    domain: str = "",
+):
+    """Insert a browser URL visit record."""
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO browser_urls (timestamp, browser, url, title, visit_duration, domain)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (timestamp.isoformat(), browser, url, title, round(visit_duration, 2), domain),
+    )
+    conn.commit()
+
+
+def bulk_insert_browser_urls(urls: list[tuple]):
+    """Insert multiple browser URL records at once."""
+    conn = get_connection()
+    conn.executemany(
+        """
+        INSERT INTO browser_urls (timestamp, browser, url, title, visit_duration, domain)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        urls,
+    )
+    conn.commit()
+
+
 # ── Query Helpers ──────────────────────────────────────────────────────────
 
 def query_activities(
     target_date: Optional[date] = None,
     limit: int = 100,
 ) -> list[dict]:
-    """
-    Fetch activity records for a given date.
-    Returns list of dicts. Defaults to today.
-    """
+    """Fetch activity records for a given date."""
     if target_date is None:
         target_date = date.today()
 
@@ -166,7 +315,7 @@ def query_activities(
     cursor = conn.execute(
         """
         SELECT app_name, window_title, start_time, end_time,
-               duration_seconds, category
+               duration_seconds, category, memory_mb, cpu_percent, pid
         FROM activity_log
         WHERE start_time LIKE ? || '%'
         ORDER BY start_time DESC
@@ -223,7 +372,7 @@ def get_category_breakdown(target_date: Optional[date] = None) -> list[dict]:
 
 
 def get_app_breakdown(target_date: Optional[date] = None) -> list[dict]:
-    """Get time spent per application for a given date."""
+    """Get time spent per application for a given date, with resource averages."""
     if target_date is None:
         target_date = date.today()
 
@@ -233,11 +382,246 @@ def get_app_breakdown(target_date: Optional[date] = None) -> list[dict]:
         """
         SELECT app_name,
                SUM(duration_seconds) as total_seconds,
-               COUNT(*) as switch_count
+               COUNT(*) as switch_count,
+               AVG(memory_mb) as avg_memory_mb,
+               AVG(cpu_percent) as avg_cpu_percent,
+               MAX(memory_mb) as peak_memory_mb
         FROM activity_log
         WHERE start_time LIKE ? || '%'
         GROUP BY app_name
         ORDER BY total_seconds DESC
+        """,
+        (date_prefix,),
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+# ── Deep App Analytics ─────────────────────────────────────────────────────
+
+def get_app_analytics(app_name: str, target_date: Optional[date] = None) -> dict:
+    """
+    Get deep analytics for a specific application on a specific date.
+    Returns total time, memory/CPU stats, window titles, and category.
+    """
+    if target_date is None:
+        target_date = date.today()
+
+    conn = get_connection()
+    date_prefix = target_date.isoformat()
+
+    # Aggregate stats
+    row = conn.execute(
+        """
+        SELECT COUNT(*) as session_count,
+               SUM(duration_seconds) as total_seconds,
+               AVG(memory_mb) as avg_memory_mb,
+               MAX(memory_mb) as peak_memory_mb,
+               AVG(cpu_percent) as avg_cpu,
+               MAX(cpu_percent) as peak_cpu,
+               MIN(start_time) as first_seen,
+               MAX(end_time) as last_seen,
+               category
+        FROM activity_log
+        WHERE app_name = ? AND start_time LIKE ? || '%'
+        """,
+        (app_name, date_prefix),
+    ).fetchone()
+
+    if not row or row["session_count"] == 0:
+        return {}
+
+    # Top window titles
+    titles = conn.execute(
+        """
+        SELECT window_title,
+               SUM(duration_seconds) as total_seconds,
+               COUNT(*) as count
+        FROM activity_log
+        WHERE app_name = ? AND start_time LIKE ? || '%'
+        GROUP BY window_title
+        ORDER BY total_seconds DESC
+        LIMIT 15
+        """,
+        (app_name, date_prefix),
+    ).fetchall()
+
+    # Resource snapshots for this app (from process_snapshots)
+    snapshots = conn.execute(
+        """
+        SELECT timestamp, memory_mb, cpu_percent, num_threads
+        FROM process_snapshots
+        WHERE app_name = ? AND timestamp LIKE ? || '%'
+        ORDER BY timestamp ASC
+        """,
+        (app_name, date_prefix),
+    ).fetchall()
+
+    return {
+        "app_name": app_name,
+        "date": date_prefix,
+        "session_count": row["session_count"],
+        "total_seconds": row["total_seconds"] or 0,
+        "avg_memory_mb": round(row["avg_memory_mb"] or 0, 2),
+        "peak_memory_mb": round(row["peak_memory_mb"] or 0, 2),
+        "avg_cpu": round(row["avg_cpu"] or 0, 2),
+        "peak_cpu": round(row["peak_cpu"] or 0, 2),
+        "first_seen": row["first_seen"],
+        "last_seen": row["last_seen"],
+        "category": row["category"] or "❓ Other",
+        "top_titles": [dict(t) for t in titles],
+        "resource_timeline": [dict(s) for s in snapshots],
+    }
+
+
+def get_app_history(app_name: str, days: int = 14) -> list[dict]:
+    """Get the usage history of an app over multiple days."""
+    conn = get_connection()
+    cursor = conn.execute(
+        """
+        SELECT
+            SUBSTR(start_time, 1, 10) as date,
+            SUM(duration_seconds) as total_seconds,
+            COUNT(*) as session_count,
+            AVG(memory_mb) as avg_memory_mb,
+            AVG(cpu_percent) as avg_cpu
+        FROM activity_log
+        WHERE app_name = ?
+        GROUP BY SUBSTR(start_time, 1, 10)
+        ORDER BY date DESC
+        LIMIT ?
+        """,
+        (app_name, days),
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_all_tracked_apps() -> list[dict]:
+    """Get list of all apps ever tracked with total time."""
+    conn = get_connection()
+    cursor = conn.execute(
+        """
+        SELECT app_name,
+               SUM(duration_seconds) as total_seconds,
+               COUNT(*) as total_sessions,
+               AVG(memory_mb) as avg_memory_mb,
+               MAX(memory_mb) as peak_memory_mb,
+               category
+        FROM activity_log
+        GROUP BY app_name
+        ORDER BY total_seconds DESC
+        """,
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+# ── System Overview ────────────────────────────────────────────────────────
+
+def get_top_memory_apps(target_date: Optional[date] = None, limit: int = 10) -> list[dict]:
+    """Get top memory-consuming apps from snapshots."""
+    if target_date is None:
+        target_date = date.today()
+
+    conn = get_connection()
+    date_prefix = target_date.isoformat()
+    cursor = conn.execute(
+        """
+        SELECT app_name,
+               AVG(memory_mb) as avg_memory_mb,
+               MAX(memory_mb) as peak_memory_mb,
+               COUNT(DISTINCT pid) as instance_count,
+               AVG(cpu_percent) as avg_cpu
+        FROM process_snapshots
+        WHERE timestamp LIKE ? || '%'
+        GROUP BY app_name
+        ORDER BY avg_memory_mb DESC
+        LIMIT ?
+        """,
+        (date_prefix, limit),
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_top_cpu_apps(target_date: Optional[date] = None, limit: int = 10) -> list[dict]:
+    """Get top CPU-consuming apps from snapshots."""
+    if target_date is None:
+        target_date = date.today()
+
+    conn = get_connection()
+    date_prefix = target_date.isoformat()
+    cursor = conn.execute(
+        """
+        SELECT app_name,
+               AVG(cpu_percent) as avg_cpu,
+               MAX(cpu_percent) as peak_cpu,
+               AVG(memory_mb) as avg_memory_mb,
+               COUNT(DISTINCT pid) as instance_count
+        FROM process_snapshots
+        WHERE timestamp LIKE ? || '%'
+        GROUP BY app_name
+        ORDER BY avg_cpu DESC
+        LIMIT ?
+        """,
+        (date_prefix, limit),
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_snapshot_count(target_date: Optional[date] = None) -> int:
+    """Get number of process snapshots for a date."""
+    if target_date is None:
+        target_date = date.today()
+
+    conn = get_connection()
+    date_prefix = target_date.isoformat()
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT timestamp) FROM process_snapshots WHERE timestamp LIKE ? || '%'",
+        (date_prefix,),
+    ).fetchone()
+    return row[0] if row else 0
+
+
+# ── Browser URL Queries ────────────────────────────────────────────────────
+
+def query_browser_urls(
+    target_date: Optional[date] = None,
+    limit: int = 100,
+) -> list[dict]:
+    """Fetch browser URL history for a given date."""
+    if target_date is None:
+        target_date = date.today()
+
+    conn = get_connection()
+    date_prefix = target_date.isoformat()
+    cursor = conn.execute(
+        """
+        SELECT timestamp, browser, url, title, visit_duration, domain
+        FROM browser_urls
+        WHERE timestamp LIKE ? || '%'
+        ORDER BY timestamp DESC
+        LIMIT ?
+        """,
+        (date_prefix, limit),
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_domain_breakdown(target_date: Optional[date] = None) -> list[dict]:
+    """Get time/visit count per domain."""
+    if target_date is None:
+        target_date = date.today()
+
+    conn = get_connection()
+    date_prefix = target_date.isoformat()
+    cursor = conn.execute(
+        """
+        SELECT domain,
+               COUNT(*) as visit_count,
+               SUM(visit_duration) as total_duration
+        FROM browser_urls
+        WHERE timestamp LIKE ? || '%' AND domain != ''
+        GROUP BY domain
+        ORDER BY visit_count DESC
+        LIMIT 30
         """,
         (date_prefix,),
     )
@@ -302,7 +686,7 @@ def upsert_daily_stats(target_date: Optional[date] = None):
     ).fetchone()
     top_category = row[0] if row else ""
 
-    # Session count (unique contiguous blocks)
+    # Session count
     row = conn.execute(
         "SELECT COUNT(*) FROM activity_log WHERE start_time LIKE ? || '%'",
         (date_prefix,),
@@ -323,6 +707,61 @@ def upsert_daily_stats(target_date: Optional[date] = None):
         """,
         (target_date.isoformat(), total, productive, distraction, top_app, top_category, session_count),
     )
+    conn.commit()
+
+
+def upsert_app_usage_history(target_date: Optional[date] = None):
+    """Compute and upsert per-app daily aggregates."""
+    if target_date is None:
+        target_date = date.today()
+
+    conn = get_connection()
+    date_prefix = target_date.isoformat()
+
+    apps = conn.execute(
+        """
+        SELECT app_name,
+               SUM(duration_seconds) as total_duration,
+               AVG(memory_mb) as avg_mem,
+               AVG(cpu_percent) as avg_cpu,
+               COUNT(*) as launch_count,
+               category
+        FROM activity_log
+        WHERE start_time LIKE ? || '%'
+        GROUP BY app_name
+        """,
+        (date_prefix,),
+    ).fetchall()
+
+    from .categorizer import get_app_role
+
+    for app in apps:
+        role = get_app_role(app["app_name"])
+        conn.execute(
+            """
+            INSERT INTO app_usage_history
+                (date, app_name, total_duration, total_memory_avg_mb, total_cpu_avg,
+                 launch_count, category, role)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(date, app_name) DO UPDATE SET
+                total_duration = excluded.total_duration,
+                total_memory_avg_mb = excluded.total_memory_avg_mb,
+                total_cpu_avg = excluded.total_cpu_avg,
+                launch_count = excluded.launch_count,
+                category = excluded.category,
+                role = excluded.role
+            """,
+            (
+                date_prefix,
+                app["app_name"],
+                round(app["total_duration"] or 0, 2),
+                round(app["avg_mem"] or 0, 2),
+                round(app["avg_cpu"] or 0, 2),
+                app["launch_count"],
+                app["category"] or "❓ Other",
+                role,
+            ),
+        )
     conn.commit()
 
 

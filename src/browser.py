@@ -279,3 +279,135 @@ def extract_searches_from_titles(
                 )
 
     return None
+
+
+# ── Full Browser URL History ──────────────────────────────────────────────
+
+@dataclass
+class BrowserUrl:
+    """A single browser URL visit."""
+    timestamp: datetime
+    browser: str
+    url: str
+    title: str
+    visit_duration: float
+    domain: str
+
+
+def extract_domain(url: str) -> str:
+    """Extract the domain from a URL."""
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc
+        # Remove www. prefix
+        if domain.startswith("www."):
+            domain = domain[4:]
+        return domain
+    except Exception:
+        return ""
+
+
+def extract_full_history(since_minutes: int = 60) -> list[BrowserUrl]:
+    """
+    Extract ALL browser URL history (not just searches).
+
+    Args:
+        since_minutes: How far back to look.
+
+    Returns:
+        List of BrowserUrl objects with domain, title, and timestamp.
+    """
+    results: list[BrowserUrl] = []
+    browsers = get_available_browsers()
+
+    for browser_name, history_path in browsers.items():
+        try:
+            urls = _extract_urls_from_browser(browser_name, history_path, since_minutes)
+            results.extend(urls)
+        except Exception:
+            continue
+
+    results.sort(key=lambda r: r.timestamp, reverse=True)
+
+    # Deduplicate by URL (keep most recent visit)
+    seen_urls: set[str] = set()
+    unique: list[BrowserUrl] = []
+    for r in results:
+        if r.url not in seen_urls:
+            seen_urls.add(r.url)
+            unique.append(r)
+
+    return unique
+
+
+def _extract_urls_from_browser(
+    browser_name: str,
+    history_path: Path,
+    since_minutes: int,
+) -> list[BrowserUrl]:
+    """Extract all URLs from a single browser's history DB."""
+    results: list[BrowserUrl] = []
+
+    tmp_dir = tempfile.mkdtemp(prefix="tracecli_urls_")
+    tmp_db = os.path.join(tmp_dir, "History_copy")
+
+    try:
+        shutil.copy2(str(history_path), tmp_db)
+    except (PermissionError, OSError):
+        return results
+
+    try:
+        conn = sqlite3.connect(tmp_db, timeout=5)
+        conn.row_factory = sqlite3.Row
+
+        now = datetime.now()
+        cutoff = now - timedelta(minutes=since_minutes)
+        chrome_cutoff = int(
+            (cutoff - datetime(1601, 1, 1)).total_seconds() * 1_000_000
+        )
+
+        cursor = conn.execute(
+            """
+            SELECT url, title, last_visit_time,
+                   COALESCE(visit_count, 0) as visit_count
+            FROM urls
+            WHERE last_visit_time > ?
+            ORDER BY last_visit_time DESC
+            LIMIT 1000
+            """,
+            (chrome_cutoff,),
+        )
+
+        for row in cursor.fetchall():
+            url = row["url"]
+            title = row["title"] or ""
+            timestamp = chrome_time_to_datetime(row["last_visit_time"])
+            domain = extract_domain(url)
+
+            # Skip internal browser URLs
+            if url.startswith(("chrome://", "edge://", "brave://", "about:", "chrome-extension://")):
+                continue
+
+            results.append(
+                BrowserUrl(
+                    timestamp=timestamp,
+                    browser=browser_name.split(" (")[0],
+                    url=url,
+                    title=title,
+                    visit_duration=0.0,
+                    domain=domain,
+                )
+            )
+
+        conn.close()
+    except Exception:
+        pass
+    finally:
+        try:
+            os.remove(tmp_db)
+            os.rmdir(tmp_dir)
+        except OSError:
+            pass
+
+    return results
+
