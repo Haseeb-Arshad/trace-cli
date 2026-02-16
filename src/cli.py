@@ -23,6 +23,7 @@ from rich.align import Align
 from rich import box
 
 from . import database as db
+from . import autostart as autostart_mod  # Renamed to avoid alias conflict with command
 from .tracker import ActivityTracker
 from .monitor import SystemMonitor, get_system_info, get_running_processes
 from .system import ShutdownGuard, register_console_handler
@@ -113,16 +114,85 @@ def print_banner():
 
 # ── CLI Group ──────────────────────────────────────────────────────────────
 
-@click.group()
-@click.version_option(version="2.0.0", prog_name="TraceCLI")
-def main():
+@click.group(invoke_without_command=True)
+@click.version_option(version="2.1.0", prog_name="TraceCLI")
+@click.pass_context
+def main(ctx):
     """🔍 TraceCLI — The terminal's black box for your digital life.
 
     A privacy-first activity monitor that tracks window usage, memory/CPU,
     browser history, and productivity — all stored locally in SQLite.
     No cloud. No accounts. No tracking.
     """
-    pass
+    if ctx.invoked_subcommand is None:
+        show_dashboard()
+
+
+def show_dashboard():
+    """Display the daily dashboard."""
+    print_banner()
+    db.init_db()
+    today = date.today()
+
+    # Fetch Data
+    stats = db.get_daily_stats(today)
+    total = stats["total_seconds"] if stats else 0
+    prod = stats["productive_seconds"] if stats else 0
+    score = stats.get("score", 0) if stats else (prod / total * 100 if total > 0 else 0)
+    top_app = stats["top_app"] if stats else "None"
+
+    # Fetch System Status
+    auto_info = autostart_mod.get_autostart_info()
+    auto_status = "Enabled" if auto_info["enabled"] else "Disabled"
+    auto_icon = "🟢" if auto_info["enabled"] else "⚪"
+
+    # Determine styles
+    score_style = "green" if score >= 70 else "yellow" if score >= 40 else "red"
+    bar_len = int(score / 5)
+    bar = "█" * bar_len + "░" * (20 - bar_len)
+
+    # Build Dashboard Panel
+    dashboard_text = Text()
+    dashboard_text.append(f"\n📅 {today.strftime('%A, %B %d, %Y')}\n\n", style="bold white")
+    
+    dashboard_text.append(f"  ⏱️  Total Tracked:    ", style="dim")
+    dashboard_text.append(f"{format_duration(total)}\n", style="bright_cyan bold")
+    
+    dashboard_text.append(f"  🧠 Productive Time:  ", style="dim")
+    dashboard_text.append(f"{format_duration(prod)}\n", style="green bold")
+    
+    dashboard_text.append(f"  🏆 Top App:          ", style="dim")
+    dashboard_text.append(f"{top_app}\n", style="white")
+    
+    dashboard_text.append(f"  🚀 Auto-Start:       ", style="dim")
+    dashboard_text.append(f"{auto_icon} {auto_status}\n\n", style="white")
+
+    dashboard_text.append(f"  Productivity Score:\n  [{score_style}]{bar}[/{score_style}] {score:.0f}%\n", style="bold")
+
+    console.print(
+        Panel(
+            dashboard_text,
+            title="📊 Daily Summary",
+            border_style="bright_blue",
+            box=box.ROUNDED,
+            expand=False,
+            padding=(1, 2),
+        )
+    )
+
+    # Quick Commands
+    console.print("\n[dim]Available Commands:[/dim]")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold cyan")
+    grid.add_column(style="dim")
+    
+    grid.add_row("tracecli start", "Start tracking activity")
+    grid.add_row("tracecli live", "View live activity feed")
+    grid.add_row("tracecli stats", "View detailed stats")
+    grid.add_row("tracecli ask", "Ask AI about your data (New!)")
+    
+    console.print(Panel(grid, border_style="dim", box=box.MINIMAL))
+    console.print()
 
 
 # ── START Command ──────────────────────────────────────────────────────────
@@ -229,6 +299,15 @@ def start(poll_interval, min_duration, sync_searches, snapshot_interval):
 
                 panel_content = _build_live_panel(current, session_dur, tracker, sys_info)
                 live.update(panel_content)
+
+                # Periodically update aggregated stats (every ~60s)
+                if int(session_dur) % 60 == 0:
+                    try:
+                        db.upsert_daily_stats()
+                        db.upsert_app_usage_history()
+                    except Exception:
+                        pass
+
                 time.sleep(1)
 
     except (KeyboardInterrupt, SystemExit):
@@ -1229,14 +1308,12 @@ def autostart(action):
         else:
             status_table.add_row("Status", "[dim]❌ Disabled[/dim]")
 
-        status_table.add_row("Task Name", info["task_name"])
+        status_table.add_row("Registry", f'{info["registry_path"]}\\{info["registry_value"]}')
         status_table.add_row("VBS Script", info["vbs_path"])
         status_table.add_row("VBS Exists", "✅" if info["vbs_exists"] else "❌")
 
-        if info.get("last_run"):
-            status_table.add_row("Last Run", info["last_run"])
-        if info.get("status"):
-            status_table.add_row("Task Status", info["status"])
+        if info.get("command"):
+            status_table.add_row("Command", info["command"])
 
         console.print()
         console.print(Panel(
@@ -1244,6 +1321,52 @@ def autostart(action):
             title="[bold]TraceCLI Auto-Start[/bold]",
             border_style="bright_cyan",
         ))
+        console.print()
+
+
+
+# ── AI Command ─────────────────────────────────────────────────────────────
+
+@main.command()
+@click.argument("question")
+def ask(question):
+    """🤖 Ask AI about your activity data."""
+    from . import ai
+    ai.handle_ask(question)
+
+
+# ── Config Command ─────────────────────────────────────────────────────────
+
+@main.command()
+@click.option("--key", help="Set AI API Key")
+@click.option("--provider", type=click.Choice(["gemini", "openai", "claude"]), help="Set AI Provider")
+@click.option("--remove-key", is_flag=True, help="Remove the current AI API Key")
+def config(key, provider, remove_key):
+    """⚙️ Configure AI settings."""
+    from . import config as cfg
+    
+    if key:
+        cfg.set_ai_key(key)
+        console.print(f"[green]API Key updated![/green]")
+        
+    if remove_key:
+        cfg.set_ai_key("")
+        console.print(f"[yellow]API Key removed![/yellow]")
+        
+    if provider:
+        cfg.set_ai_provider(provider)
+        console.print(f"[green]Provider set to {provider}![/green]")
+        
+    if not key and not provider and not remove_key:
+        # Show current config
+        p, k, m = cfg.get_ai_config()
+        mask_key = k[:4] + "..." + k[-4:] if len(k) > 8 else "Not Set"
+        console.print(f"\n[bold]Current Configuration:[/bold]")
+        console.print(f"  Provider: [cyan]{p}[/cyan]")
+        console.print(f"  API Key:  [dim]{mask_key}[/dim]")
+        
+        config_path = cfg.CONFIG_PATH
+        console.print(f"\n[dim]Config file: {config_path}[/dim]")
         console.print()
 
 

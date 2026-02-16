@@ -1,30 +1,38 @@
 """
 TraceCLI Auto-Start Manager
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Creates/removes a Windows Task Scheduler task that silently launches
-TraceCLI on user logon using a VBS wrapper (no visible console window).
+Manages TraceCLI auto-start on Windows login using two mechanisms:
+
+1. **Registry Run key** (primary) — HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run
+   - No admin rights needed, runs at user logon
+   - Standard Windows mechanism for per-user startup apps
+
+2. **VBS silent wrapper** — Launches tracecli with no visible console window
+
+Together: Windows runs the VBS at login → VBS launches tracecli in background.
 """
 
 import os
-import subprocess
 import shutil
+import winreg
 from pathlib import Path
 
 
 # ── Configuration ──────────────────────────────────────────────────────────
 
-TASK_NAME = "TraceCLI_AutoStart"
+REGISTRY_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+REGISTRY_VALUE_NAME = "TraceCLI"
 DATA_DIR = Path.home() / ".tracecli"
 VBS_PATH = DATA_DIR / "silent_start.vbs"
 
 # The VBS script that launches tracecli silently (no console window)
-VBS_CONTENT = '''
+VBS_CONTENT = '''\
 ' TraceCLI Silent Launcher
 ' Launches tracecli start in background with no visible console window.
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.Run "tracecli start", 0, False
 Set WshShell = Nothing
-'''.strip()
+'''
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
@@ -35,7 +43,7 @@ def enable_autostart() -> tuple[bool, str]:
 
     Creates:
       1. A VBS launcher script at ~/.tracecli/silent_start.vbs
-      2. A Windows Task Scheduler task that runs it at logon
+      2. A Registry Run key pointing to wscript.exe + the VBS
 
     Returns:
         (success, message)
@@ -54,47 +62,32 @@ def enable_autostart() -> tuple[bool, str]:
     # Write the VBS launcher script
     VBS_PATH.write_text(VBS_CONTENT, encoding="utf-8")
 
-    # Remove existing task if present (clean re-create)
-    _delete_task()
-
-    # Create the Task Scheduler task
-    # /SC ONLOGON = trigger at user logon
-    # /RL HIGHEST = run with highest available privileges
-    # /F = force create (overwrite if exists)
-    # /TR = the command to run (wscript.exe with our VBS)
-    cmd = [
-        "schtasks", "/Create",
-        "/TN", TASK_NAME,
-        "/SC", "ONLOGON",
-        "/TR", f'wscript.exe "{VBS_PATH}"',
-        "/RL", "HIGHEST",
-        "/F",
-        "/IT",  # Interactive only (only when user is logged in)
-    ]
-
+    # Create the Registry Run key
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=15,
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            REGISTRY_KEY_PATH,
+            0,
+            winreg.KEY_SET_VALUE,
+        )
+        winreg.SetValueEx(
+            key,
+            REGISTRY_VALUE_NAME,
+            0,
+            winreg.REG_SZ,
+            f'wscript.exe "{VBS_PATH}"',
+        )
+        winreg.CloseKey(key)
+
+        return True, (
+            f"Auto-start enabled!\n"
+            f"  Registry: HKCU\\{REGISTRY_KEY_PATH}\\{REGISTRY_VALUE_NAME}\n"
+            f"  Script: {VBS_PATH}\n"
+            f"TraceCLI will start silently on next login."
         )
 
-        if result.returncode == 0:
-            return True, (
-                f"Auto-start enabled!\n"
-                f"  Task: {TASK_NAME}\n"
-                f"  Script: {VBS_PATH}\n"
-                f"TraceCLI will start silently on next login."
-            )
-        else:
-            error = result.stderr.strip() or result.stdout.strip()
-            return False, f"Failed to create scheduled task: {error}"
-
-    except subprocess.TimeoutExpired:
-        return False, "Timed out creating scheduled task."
-    except FileNotFoundError:
-        return False, "schtasks.exe not found. Windows Task Scheduler may not be available."
+    except WindowsError as e:
+        return False, f"Failed to write registry key: {e}"
     except Exception as e:
         return False, f"Unexpected error: {e}"
 
@@ -104,13 +97,13 @@ def disable_autostart() -> tuple[bool, str]:
     Disable TraceCLI auto-start.
 
     Removes:
-      1. The Windows Task Scheduler task
+      1. The Registry Run key
       2. The VBS launcher script
 
     Returns:
         (success, message)
     """
-    task_deleted = _delete_task()
+    reg_deleted = _delete_registry_value()
 
     # Remove VBS file
     vbs_deleted = False
@@ -121,22 +114,26 @@ def disable_autostart() -> tuple[bool, str]:
     except Exception:
         pass
 
-    if task_deleted or vbs_deleted:
-        return True, "Auto-start disabled. Task and launcher removed."
+    if reg_deleted or vbs_deleted:
+        return True, "Auto-start disabled. Registry key and launcher removed."
     else:
         return True, "Auto-start was not enabled (nothing to remove)."
 
 
 def is_autostart_enabled() -> bool:
-    """Check if the auto-start scheduled task exists."""
+    """Check if the auto-start Registry Run key exists."""
     try:
-        result = subprocess.run(
-            ["schtasks", "/Query", "/TN", TASK_NAME],
-            capture_output=True,
-            text=True,
-            timeout=10,
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            REGISTRY_KEY_PATH,
+            0,
+            winreg.KEY_READ,
         )
-        return result.returncode == 0
+        winreg.QueryValueEx(key, REGISTRY_VALUE_NAME)
+        winreg.CloseKey(key)
+        return True
+    except FileNotFoundError:
+        return False
     except Exception:
         return False
 
@@ -148,28 +145,23 @@ def get_autostart_info() -> dict:
 
     info = {
         "enabled": enabled,
-        "task_name": TASK_NAME,
+        "registry_path": f"HKCU\\{REGISTRY_KEY_PATH}",
+        "registry_value": REGISTRY_VALUE_NAME,
         "vbs_path": str(VBS_PATH),
         "vbs_exists": vbs_exists,
     }
 
     if enabled:
         try:
-            result = subprocess.run(
-                ["schtasks", "/Query", "/TN", TASK_NAME, "/V", "/FO", "LIST"],
-                capture_output=True,
-                text=True,
-                timeout=10,
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                REGISTRY_KEY_PATH,
+                0,
+                winreg.KEY_READ,
             )
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    line = line.strip()
-                    if line.startswith("Status:"):
-                        info["status"] = line.split(":", 1)[1].strip()
-                    elif line.startswith("Next Run Time:"):
-                        info["next_run"] = line.split(":", 1)[1].strip()
-                    elif line.startswith("Last Run Time:"):
-                        info["last_run"] = line.split(":", 1)[1].strip()
+            value, _ = winreg.QueryValueEx(key, REGISTRY_VALUE_NAME)
+            winreg.CloseKey(key)
+            info["command"] = value
         except Exception:
             pass
 
@@ -178,15 +170,19 @@ def get_autostart_info() -> dict:
 
 # ── Internal Helpers ───────────────────────────────────────────────────────
 
-def _delete_task() -> bool:
-    """Delete the scheduled task if it exists. Returns True if deleted."""
+def _delete_registry_value() -> bool:
+    """Delete the Registry Run value if it exists. Returns True if deleted."""
     try:
-        result = subprocess.run(
-            ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
-            capture_output=True,
-            text=True,
-            timeout=10,
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            REGISTRY_KEY_PATH,
+            0,
+            winreg.KEY_SET_VALUE,
         )
-        return result.returncode == 0
+        winreg.DeleteValue(key, REGISTRY_VALUE_NAME)
+        winreg.CloseKey(key)
+        return True
+    except FileNotFoundError:
+        return False
     except Exception:
         return False

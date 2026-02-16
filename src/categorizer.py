@@ -43,6 +43,9 @@ DEV_PROCESSES = {
     "insomnia.exe",
     "docker desktop.exe",
     "wsl.exe",
+    "antigravity.exe",      # TrackCLI Agent
+    "python.exe",           # Python scripts
+    "pythonw.exe",
 }
 
 BROWSER_PROCESSES = {
@@ -84,6 +87,12 @@ DISTRACTION_PROCESSES = {
     "spotify.exe",
     "vlc.exe",
     "wmplayer.exe",
+    "netflix.exe",
+    "steam.exe",
+    "epicgameslauncher.exe",
+    "battle.net.exe",
+    "tiktok.exe",
+    "whatsapp.exe",
 }
 
 # ── Title-Based Rules (for browsers & general) ────────────────────────────

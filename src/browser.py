@@ -119,12 +119,15 @@ CHROME_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
 
 
 def chrome_time_to_datetime(chrome_timestamp: int) -> datetime:
-    """Convert Chrome's microsecond timestamp to a Python datetime."""
+    """Convert Chrome's microsecond timestamp to a Python datetime (Normalized to Local Time)."""
     if chrome_timestamp == 0:
         return datetime.now()
     try:
         delta = timedelta(microseconds=chrome_timestamp)
-        return (CHROME_EPOCH + delta).replace(tzinfo=None)
+        utc_dt = (CHROME_EPOCH + delta)
+        # Convert UTC to Local time
+        local_dt = utc_dt.astimezone()
+        return local_dt.replace(tzinfo=None)
     except (OverflowError, OSError):
         return datetime.now()
 

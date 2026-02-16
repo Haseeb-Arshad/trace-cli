@@ -131,18 +131,22 @@ class ActivityTracker:
 
     def __init__(
         self,
-        poll_interval: float = 1.0,
-        min_duration: float = 2.0,
-        on_switch: Optional[Callable[[ActivityRecord], None]] = None,
+        poll_interval: int = 1,
+        min_duration: int = 5,
+        max_duration: int = 60,  # Flush to DB every 60s even if window hasn't changed
+        on_switch: Optional[Callable[["ActivityRecord"], None]] = None,
     ):
         """
         Args:
             poll_interval: Seconds between foreground window checks.
             min_duration: Minimum seconds an activity must last to be logged.
+            max_duration: Maximum seconds an activity can run before being flushed to DB,
+                          even if the window hasn't changed.
             on_switch: Optional callback fired on each window switch.
         """
         self.poll_interval = poll_interval
         self.min_duration = min_duration
+        self.max_duration = max_duration
         self.on_switch = on_switch
 
         self._running = False
@@ -246,6 +250,14 @@ class ActivityTracker:
                 # Sample resources on every poll
                 mem, cpu = get_process_resources(pid)
                 self._current.add_resource_sample(mem, cpu)
+
+                # Check if we should flush due to duration
+                elapsed = (datetime.now() - self._current.start_time).total_seconds()
+                if elapsed >= self.max_duration:
+                    # Flush current segment and start new one immediately
+                    self._finalize_and_save(self._current)
+                    self._current = self._create_record(app_name, window_title, pid)
+
                 return
 
             # Window changed — finalize old, start new
