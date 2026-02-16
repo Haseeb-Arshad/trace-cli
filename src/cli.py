@@ -1187,6 +1187,66 @@ def status():
     console.print()
 
 
+# ── Auto-Start Management ─────────────────────────────────────────────────
+
+@main.command()
+@click.option("--enable", "action", flag_value="enable", help="Enable auto-start on Windows login")
+@click.option("--disable", "action", flag_value="disable", help="Disable auto-start")
+@click.option("--status", "action", flag_value="status", default=True, help="Show auto-start status (default)")
+def autostart(action):
+    """Manage TraceCLI Windows startup behavior.
+
+    \b
+    tracecli autostart --enable   Start TraceCLI silently on login
+    tracecli autostart --disable  Remove auto-start
+    tracecli autostart --status   Check current status
+    """
+    from .autostart import enable_autostart, disable_autostart, get_autostart_info
+
+    if action == "enable":
+        success, msg = enable_autostart()
+        if success:
+            console.print(f"\n[bold green]✅ {msg}[/bold green]\n")
+        else:
+            console.print(f"\n[bold red]❌ {msg}[/bold red]\n")
+            raise SystemExit(1)
+
+    elif action == "disable":
+        success, msg = disable_autostart()
+        if success:
+            console.print(f"\n[bold yellow]🔕 {msg}[/bold yellow]\n")
+        else:
+            console.print(f"\n[bold red]❌ {msg}[/bold red]\n")
+
+    else:  # status
+        info = get_autostart_info()
+        status_table = Table(show_header=False, box=box.SIMPLE, padding=(0, 2))
+        status_table.add_column("Key", style="bold cyan")
+        status_table.add_column("Value")
+
+        if info["enabled"]:
+            status_table.add_row("Status", "[bold green]✅ Enabled[/bold green]")
+        else:
+            status_table.add_row("Status", "[dim]❌ Disabled[/dim]")
+
+        status_table.add_row("Task Name", info["task_name"])
+        status_table.add_row("VBS Script", info["vbs_path"])
+        status_table.add_row("VBS Exists", "✅" if info["vbs_exists"] else "❌")
+
+        if info.get("last_run"):
+            status_table.add_row("Last Run", info["last_run"])
+        if info.get("status"):
+            status_table.add_row("Task Status", info["status"])
+
+        console.print()
+        console.print(Panel(
+            status_table,
+            title="[bold]TraceCLI Auto-Start[/bold]",
+            border_style="bright_cyan",
+        ))
+        console.print()
+
+
 # ── Entry Point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
