@@ -6,6 +6,7 @@ Built with Click + Rich for a premium terminal experience.
 """
 
 import sys
+import subprocess
 import time
 import threading
 from datetime import datetime, date, timedelta
@@ -119,7 +120,7 @@ def print_banner():
 @click.version_option(version="2.0.0", prog_name="TraceCLI")
 @click.pass_context
 def main(ctx):
-    """🔍 TraceCLI — The terminal's black box for your digital life.
+    """TraceCLI — The terminal's black box for your digital life.
 
     A privacy-first activity monitor that tracks window usage, memory/CPU,
     browser history, and productivity — all stored locally in SQLite.
@@ -138,8 +139,13 @@ def show_dashboard():
     # Fetch Data
     stats = db.get_daily_stats(today)
     total = stats["total_seconds"] if stats else 0
+    total = stats["total_seconds"] if stats else 0
     prod = stats["productive_seconds"] if stats else 0
-    score = stats.get("score", 0) if stats else (prod / total * 100 if total > 0 else 0)
+    
+    # Calculate score (fallback if DB doesn't have it stored)
+    fallback_score = (prod / total * 100) if total > 0 else 0
+    score = stats.get("score", fallback_score) if stats else 0
+    
     top_app = stats["top_app"] if stats else "None"
 
     # Fetch System Status
@@ -187,12 +193,23 @@ def show_dashboard():
     grid.add_column(style="bold cyan")
     grid.add_column(style="dim")
     
-    grid.add_row("tracecli start", "Start tracking activity")
+    grid.add_row("tracecli start", "Start activity tracking")
     grid.add_row("tracecli live", "View live activity feed")
-    grid.add_row("tracecli stats", "View detailed stats")
-    grid.add_row("tracecli ask", "Ask AI about your data (New!)")
+    grid.add_row("tracecli report", "Detailed daily report")
+    grid.add_row("tracecli timeline", "Visual daily timeline")
+    grid.add_row("tracecli stats", "Daily productivity stats")
+    grid.add_row("tracecli heatmap", "Productivity heatmap graph")
+    grid.add_row("tracecli focus", "Start focus session")
+    grid.add_row("tracecli insights", "Get AI-powered insights")
+    grid.add_row("tracecli app", "Deep analytics for an app")
+    grid.add_row("tracecli urls", "Browser history & domains")
+    grid.add_row("tracecli searches", "Search query history")
+    grid.add_row("tracecli system", "System resource overview")
+    grid.add_row("tracecli ask", "Ask AI about your data")
+    grid.add_row("tracecli status", "CLI and Database status")
     
     console.print(Panel(grid, border_style="dim", box=box.MINIMAL))
+    console.print("[dim]Use [bold white]tracecli --help[/bold white] for more options.[/dim]")
     console.print()
 
 
@@ -203,8 +220,24 @@ def show_dashboard():
 @click.option("--min-duration", default=2.0, help="Minimum activity duration to log (seconds)")
 @click.option("--sync-searches", default=300, help="Browser search sync interval (seconds)")
 @click.option("--snapshot-interval", default=30, help="System snapshot interval (seconds)")
-def start(poll_interval, min_duration, sync_searches, snapshot_interval):
-    """▶️  Start background activity tracking with live dashboard."""
+@click.option("--background", "-b", is_flag=True, help="Run silently in background (no console window)")
+def start(poll_interval, min_duration, sync_searches, snapshot_interval, background):
+    """Start background activity tracking with live dashboard."""
+    if background:
+        # Check if VBS launcher exists, if not create it (enables autostart too)
+        if not autostart_mod.VBS_PATH.exists():
+            console.print("[yellow]Creating background launcher...[/yellow]")
+            autostart_mod.enable_autostart()
+        
+        console.print(f"[green]🚀 Launching TraceCLI in background...[/green]")
+        try:
+            subprocess.Popen(["wscript", str(autostart_mod.VBS_PATH)], shell=False)
+            console.print(f"[dim]Process started! You can now close this terminal.[/dim]")
+            console.print(f"[dim]Use 'tracecli live' to verify activity.[/dim]")
+        except Exception as e:
+            console.print(f"[red]Failed to launch background process: {e}[/red]")
+        return
+
     print_banner()
     db.init_db()
 
@@ -421,7 +454,7 @@ def _build_live_panel(
 @click.option("--date", "-d", "date_str", default=None, help="Date (YYYY-MM-DD), defaults to today")
 @click.option("--limit", "-n", default=50, help="Max records to show")
 def report(date_str, limit):
-    """📊 Show detailed activity report for a day."""
+    """Show detailed activity report for a day."""
     target = parse_date(date_str)
     db.init_db()
 
@@ -565,7 +598,7 @@ def report(date_str, limit):
 @main.command()
 @click.option("--date", "-d", "date_str", default=None, help="Date (YYYY-MM-DD)")
 def timeline(date_str):
-    """⏰ Show a visual timeline of your day."""
+    """Show a visual timeline of your day."""
     target = parse_date(date_str)
     db.init_db()
 
@@ -617,7 +650,7 @@ def timeline(date_str):
 @click.option("--date", "-d", "date_str", default=None, help="Date (YYYY-MM-DD)")
 @click.option("--sync/--no-sync", default=True, help="Sync browser history first")
 def searches(date_str, sync):
-    """🔎 Show extracted search queries."""
+    """Show extracted search queries."""
     target = parse_date(date_str)
     db.init_db()
 
@@ -673,7 +706,7 @@ def searches(date_str, sync):
 @main.command()
 @click.option("--days", "-n", default=7, help="Number of days to show")
 def stats(days):
-    """📈 Show daily productivity stats."""
+    """Show daily productivity stats."""
     db.init_db()
 
     # Ensure today's stats are up to date
@@ -726,7 +759,7 @@ def stats(days):
 
 @main.command()
 def live():
-    """⚡ Show live activity feed (read-only, tracker must be running)."""
+    """Show live activity feed (read-only, tracker must be running)."""
     db.init_db()
 
     console.print()
@@ -786,7 +819,7 @@ def live():
 )
 @click.option("--output", "-o", "output_path", default=None, help="Output file path")
 def export(date_str, fmt, output_path):
-    """💾 Export activity data to CSV or JSON."""
+    """Export activity data to CSV or JSON."""
     target = parse_date(date_str)
     db.init_db()
 
@@ -818,7 +851,7 @@ def export(date_str, fmt, output_path):
 @click.argument("app_name")
 @click.option("--date", "-d", "date_str", default=None, help="Date (YYYY-MM-DD)")
 def app(app_name, date_str):
-    """🔬 Deep analytics drill-down for a specific application.
+    """Deep analytics drill-down for a specific application.
 
     Examples:
         tracecli app chrome.exe
@@ -953,7 +986,7 @@ def app(app_name, date_str):
 @click.option("--date", "-d", "date_str", default=None, help="Date (YYYY-MM-DD)")
 @click.option("--live-now", is_flag=True, help="Show live system snapshot (ignores date)")
 def system(date_str, live_now):
-    """💻 Show system resource overview — memory, CPU, and all running apps."""
+    """Show system resource overview — memory, CPU, and all running apps."""
     db.init_db()
 
     if live_now:
@@ -1123,7 +1156,7 @@ def _show_live_system():
 @click.option("--sync/--no-sync", default=True, help="Sync browser history first")
 @click.option("--limit", "-n", default=50, help="Max URLs to show")
 def urls(date_str, sync, limit):
-    """🌐 Show full browser URL history with domain breakdown."""
+    """Show full browser URL history with domain breakdown."""
     target = parse_date(date_str)
     db.init_db()
 
@@ -1205,7 +1238,7 @@ def urls(date_str, sync, limit):
 
 @main.command()
 def status():
-    """ℹ️  Show TraceCLI status and database info."""
+    """Show TraceCLI status and database info."""
     db.init_db()
 
     console.print()
@@ -1331,7 +1364,7 @@ def autostart(action):
 @main.command()
 @click.argument("question")
 def ask(question):
-    """🤖 Ask AI about your activity data."""
+    """Ask AI about your activity data."""
     from . import ai
     ai.handle_ask(question)
 
@@ -1343,7 +1376,7 @@ def ask(question):
 @click.option("--provider", type=click.Choice(["gemini", "openai", "claude"]), help="Set AI Provider")
 @click.option("--remove-key", is_flag=True, help="Remove the current AI API Key")
 def config(key, provider, remove_key):
-    """⚙️ Configure AI settings."""
+    """Configure AI settings."""
     from . import config as cfg
     
     if key:
@@ -1376,7 +1409,7 @@ def config(key, provider, remove_key):
 @main.command()
 @click.option("--days", "-d", default=7, help="Number of days to analyze (default: 7)")
 def insights(days):
-    """🧠 AI-powered productivity digest and coaching insights."""
+    """AI-powered productivity digest and coaching insights."""
     db.init_db()
 
     from . import config as cfg
@@ -1419,7 +1452,7 @@ def insights(days):
 @click.option("--duration", "-d", default=25, help="Focus duration in minutes (default: 25)")
 @click.option("--goal", "-g", default="", help="Label for this focus session")
 def focus(duration, goal):
-    """🎯 Start a Pomodoro-style focus session with distraction detection."""
+    """Start a Pomodoro-style focus session with distraction detection."""
     db.init_db()
 
     console.print()
@@ -1543,7 +1576,7 @@ def focus(duration, goal):
 @click.option("--date", "-d", "date_str", default=None, help="Filter by date (YYYY-MM-DD)")
 @click.option("--limit", "-n", default=10, help="Number of sessions to show")
 def focus_history(date_str, limit):
-    """📜 View past focus sessions."""
+    """View past focus sessions."""
     db.init_db()
 
     target_date = parse_date(date_str) if date_str else None
@@ -1600,7 +1633,7 @@ def focus_history(date_str, limit):
 @main.command()
 @click.option("--weeks", default=20, help="Number of weeks to display (default: 20)")
 def heatmap(weeks):
-    """📊 Display a GitHub-style productivity heatmap in the terminal."""
+    """Display a GitHub-style productivity heatmap in the terminal."""
     db.init_db()
 
     heatmap_data = db.get_productivity_heatmap_data(weeks)
@@ -1715,7 +1748,7 @@ def heatmap(weeks):
 
 @main.command()
 def week():
-    """📅 Show a quick weekly productivity summary."""
+    """Show a quick weekly productivity summary."""
     db.init_db()
 
     stats_list = db.get_stats_range(7)

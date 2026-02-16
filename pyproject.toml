@@ -9,8 +9,13 @@ description = "The terminal's black box for your digital life. A privacy-first a
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
-authors = [{name = "TraceCLI"}]
-keywords = ["productivity", "tracker", "cli", "windows", "privacy"]
+authors = [{name = "Haseeb Arshad", email = "haseebarshad@users.noreply.github.com"}]
+keywords = ["productivity", "tracker", "cli", "windows", "privacy", "copilot"]
+
+[project.urls]
+Homepage = "https://github.com/Haseeb-Arshad/trace-cli"
+Repository = "https://github.com/Haseeb-Arshad/trace-cli"
+Issues = "https://github.com/Haseeb-Arshad/trace-cli/issues"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",

@@ -8,7 +8,7 @@ All data lives in ~/.tracecli/trace.db — never leaves your machine.
 import sqlite3
 import os
 import threading
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Optional
 

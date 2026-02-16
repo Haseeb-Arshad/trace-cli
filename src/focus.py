@@ -183,9 +183,24 @@ class FocusMonitor:
 
             window_title = win32gui.GetWindowText(hwnd)
             category = categorize(app_name, window_title)
-            is_distraction = category in {
-                CATEGORIES["DISTRACTION"],
-            }
+            
+            # Stricter distraction detection:
+            # Anything NOT in a productive category is a distraction during focus mode.
+            # We also ignore "Other" if it's the TraceCLI app itself (antigravity.exe) or Explorer
+            # to avoid false positives, but Chrome/Browsing/Games always count.
+            
+            is_productive_task = is_productive(category)
+            
+            # Whitelist some background system apps that shouldn't count as "distractions" 
+            # even if not strictly "productive".
+            whitelist = {"explorer.exe", "antigravity.exe", "searchhost.exe", "shellexperiencehost.exe"}
+            is_whitelisted = app_name.lower() in whitelist
+            
+            is_distraction = not is_productive_task and not is_whitelisted
+            
+            # Special case: Browser is NEVER whitelisted unless it's on a productive site
+            if app_name.lower() in {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe"}:
+                is_distraction = not is_productive_task
 
             now = datetime.now()
 
