@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tracecli"
-version = "1.0.0"
+version = "2.0.0"
 description = "The terminal's black box for your digital life. A privacy-first activity monitor."
 readme = "README.md"
 requires-python = ">=3.9"

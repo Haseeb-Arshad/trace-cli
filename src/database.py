@@ -128,6 +128,18 @@ CREATE TABLE IF NOT EXISTS browser_urls (
     domain          TEXT    NOT NULL DEFAULT ''
 );
 
+-- Focus session tracking
+CREATE TABLE IF NOT EXISTS focus_sessions (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    start_time          TEXT    NOT NULL,
+    end_time            TEXT    NOT NULL,
+    target_minutes      INTEGER NOT NULL DEFAULT 25,
+    actual_focus_seconds REAL   NOT NULL DEFAULT 0,
+    interruption_count  INTEGER NOT NULL DEFAULT 0,
+    focus_score         REAL    NOT NULL DEFAULT 0,
+    goal_label          TEXT    NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_activity_start ON activity_log(start_time);
 CREATE INDEX IF NOT EXISTS idx_activity_category ON activity_log(category);
 CREATE INDEX IF NOT EXISTS idx_activity_app ON activity_log(app_name);
@@ -139,6 +151,7 @@ CREATE INDEX IF NOT EXISTS idx_app_usage_date ON app_usage_history(date);
 CREATE INDEX IF NOT EXISTS idx_app_usage_name ON app_usage_history(app_name);
 CREATE INDEX IF NOT EXISTS idx_browser_urls_timestamp ON browser_urls(timestamp);
 CREATE INDEX IF NOT EXISTS idx_browser_urls_domain ON browser_urls(domain);
+CREATE INDEX IF NOT EXISTS idx_focus_start ON focus_sessions(start_time);
 """
 
 # Migration SQL for existing databases (adds new columns safely)
@@ -791,3 +804,166 @@ def get_stats_range(days: int = 7) -> list[dict]:
         (days,),
     )
     return [dict(row) for row in cursor.fetchall()]
+
+
+def get_productivity_heatmap_data(weeks: int = 52) -> list[dict]:
+    """
+    Fetch daily productivity scores for the heatmap.
+
+    Returns a list of dicts with 'date', 'total_seconds', 'productive_seconds',
+    'score' (0-100) for each day in the range.
+    """
+    conn = get_connection()
+    start_date = date.today() - timedelta(days=weeks * 7)
+    cursor = conn.execute(
+        """
+        SELECT date, total_seconds, productive_seconds, distraction_seconds
+        FROM daily_stats
+        WHERE date >= ?
+        ORDER BY date ASC
+        """,
+        (start_date.isoformat(),),
+    )
+    results = []
+    for row in cursor.fetchall():
+        row_dict = dict(row)
+        total = row_dict["total_seconds"] or 0
+        productive = row_dict["productive_seconds"] or 0
+        score = round((productive / total) * 100) if total > 0 else 0
+        results.append({
+            "date": row_dict["date"],
+            "total_seconds": total,
+            "productive_seconds": productive,
+            "score": score,
+        })
+    return results
+
+
+def get_streak_info() -> dict:
+    """
+    Calculate current and longest productivity streaks.
+
+    A 'streak day' is any day with total_seconds > 0.
+    Returns: {'current_streak': int, 'longest_streak': int, 'total_days_tracked': int}
+    """
+    conn = get_connection()
+    cursor = conn.execute(
+        """
+        SELECT date FROM daily_stats
+        WHERE total_seconds > 0
+        ORDER BY date ASC
+        """
+    )
+    dates_tracked = [
+        date.fromisoformat(row["date"]) for row in cursor.fetchall()
+    ]
+
+    if not dates_tracked:
+        return {"current_streak": 0, "longest_streak": 0, "total_days_tracked": 0}
+
+    # Calculate longest streak
+    longest = 1
+    current = 1
+    for i in range(1, len(dates_tracked)):
+        if (dates_tracked[i] - dates_tracked[i - 1]).days == 1:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 1
+
+    # Calculate current streak (counting back from today)
+    today = date.today()
+    current_streak = 0
+    check_date = today
+    date_set = set(dates_tracked)
+    while check_date in date_set:
+        current_streak += 1
+        check_date -= timedelta(days=1)
+
+    return {
+        "current_streak": current_streak,
+        "longest_streak": longest,
+        "total_days_tracked": len(dates_tracked),
+    }
+
+
+# ── Focus Session Functions ────────────────────────────────────────────────
+
+def insert_focus_session(
+    start_time: datetime,
+    end_time: datetime,
+    target_minutes: int,
+    actual_focus_seconds: float,
+    interruption_count: int,
+    focus_score: float,
+    goal_label: str = "",
+):
+    """Insert a completed focus session."""
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO focus_sessions
+            (start_time, end_time, target_minutes, actual_focus_seconds,
+             interruption_count, focus_score, goal_label)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            start_time.isoformat(),
+            end_time.isoformat(),
+            target_minutes,
+            actual_focus_seconds,
+            interruption_count,
+            focus_score,
+            goal_label,
+        ),
+    )
+    conn.commit()
+
+
+def query_focus_sessions(target_date: Optional[date] = None, limit: int = 20) -> list[dict]:
+    """Query focus sessions, optionally filtered by date."""
+    conn = get_connection()
+    if target_date:
+        cursor = conn.execute(
+            """
+            SELECT * FROM focus_sessions
+            WHERE date(start_time) = ?
+            ORDER BY start_time DESC
+            LIMIT ?
+            """,
+            (target_date.isoformat(), limit),
+        )
+    else:
+        cursor = conn.execute(
+            """
+            SELECT * FROM focus_sessions
+            ORDER BY start_time DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_focus_stats() -> dict:
+    """Get aggregate focus session statistics."""
+    conn = get_connection()
+    cursor = conn.execute(
+        """
+        SELECT
+            COUNT(*) as total_sessions,
+            COALESCE(SUM(actual_focus_seconds), 0) as total_focus_seconds,
+            COALESCE(AVG(focus_score), 0) as avg_focus_score,
+            COALESCE(SUM(interruption_count), 0) as total_interruptions,
+            COALESCE(MAX(focus_score), 0) as best_score
+        FROM focus_sessions
+        """
+    )
+    row = cursor.fetchone()
+    return dict(row) if row else {
+        "total_sessions": 0,
+        "total_focus_seconds": 0,
+        "avg_focus_score": 0,
+        "total_interruptions": 0,
+        "best_score": 0,
+    }

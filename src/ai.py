@@ -272,3 +272,97 @@ def handle_ask(question: str):
     console.print()
     console.print(Panel(answer, title="🤖 AI Answer", border_style="cyan"))
     console.print()
+
+
+# ── Weekly Productivity Digest ─────────────────────────────────────────────
+
+def generate_weekly_digest(days: int = 7) -> Optional[str]:
+    """
+    Generate an AI-powered productivity digest for the past N days.
+
+    Collects daily stats, app usage, and search patterns, then asks
+    the LLM to generate a personalized productivity coaching report.
+    """
+    provider, api_key, model = config.get_ai_config()
+    if not api_key:
+        return None
+
+    from .database import (
+        get_stats_range, get_category_breakdown, get_app_breakdown,
+        get_focus_stats, query_searches,
+    )
+    from datetime import date, timedelta
+
+    # Gather data
+    stats = get_stats_range(days)
+    today = date.today()
+
+    if not stats:
+        return "No activity data found for the past week."
+
+    # Build structured summary
+    total_seconds = sum(s["total_seconds"] for s in stats)
+    productive_seconds = sum(s["productive_seconds"] for s in stats)
+    distraction_seconds = sum(s["distraction_seconds"] for s in stats)
+
+    # App breakdown for latest day
+    app_breakdown = get_app_breakdown(today)
+    top_apps = [
+        {"app": a["app_name"], "time_hours": round(a["total_seconds"] / 3600, 1)}
+        for a in app_breakdown[:5]
+    ]
+
+    # Category breakdown for latest day
+    cat_breakdown = get_category_breakdown(today)
+    categories = [
+        {"category": c["category"], "time_hours": round(c["total_seconds"] / 3600, 1)}
+        for c in cat_breakdown
+    ]
+
+    # Focus stats
+    focus = get_focus_stats()
+
+    # Search patterns
+    searches = query_searches(today)
+    recent_queries = [s["query"] for s in searches[:10]]
+
+    summary = {
+        "period_days": days,
+        "total_tracked_hours": round(total_seconds / 3600, 1),
+        "productive_hours": round(productive_seconds / 3600, 1),
+        "distraction_hours": round(distraction_seconds / 3600, 1),
+        "productivity_score": round((productive_seconds / total_seconds) * 100) if total_seconds > 0 else 0,
+        "days_tracked": len(stats),
+        "daily_breakdown": [
+            {
+                "date": s["date"],
+                "hours": round(s["total_seconds"] / 3600, 1),
+                "productive_hours": round(s["productive_seconds"] / 3600, 1),
+                "score": round((s["productive_seconds"] / s["total_seconds"]) * 100) if s["total_seconds"] > 0 else 0,
+            }
+            for s in stats
+        ],
+        "top_apps": top_apps,
+        "categories": categories,
+        "focus_sessions": focus.get("total_sessions", 0),
+        "avg_focus_score": round(focus.get("avg_focus_score", 0), 1),
+        "recent_searches": recent_queries,
+    }
+
+    prompt = f"""You are a friendly, insightful productivity coach analyzing someone's computer usage data.
+
+Here is their activity summary for the past {days} days:
+{json.dumps(summary, indent=2)}
+
+Generate a concise, personalized productivity digest with these sections:
+1. 🏆 **Top Achievement** — Highlight their best metric or pattern (be specific with numbers)
+2. ⚠️ **Biggest Distraction Pattern** — Identify when/where they get distracted most
+3. 💡 **Actionable Suggestion** — One specific, practical tip to improve tomorrow
+4. 📊 **Week-over-Week** — Comment on trends if multiple days of data exist
+
+Keep each section to 1-2 sentences. Be encouraging but honest.
+Use emoji and make it engaging. Don't use markdown headers, just the emoji labels above.
+If there's limited data, acknowledge it and focus on what you can see."""
+
+    result = ask_llm(provider, api_key, prompt, model)
+    return result

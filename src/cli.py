@@ -29,6 +29,7 @@ from .monitor import SystemMonitor, get_system_info, get_running_processes
 from .system import ShutdownGuard, register_console_handler
 from .browser import extract_searches, extract_full_history
 from .categorizer import is_productive, get_category_emoji, get_app_role
+from .focus import FocusMonitor
 
 console = Console()
 
@@ -115,7 +116,7 @@ def print_banner():
 # ── CLI Group ──────────────────────────────────────────────────────────────
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="2.1.0", prog_name="TraceCLI")
+@click.version_option(version="2.0.0", prog_name="TraceCLI")
 @click.pass_context
 def main(ctx):
     """🔍 TraceCLI — The terminal's black box for your digital life.
@@ -1370,7 +1371,393 @@ def config(key, provider, remove_key):
         console.print()
 
 
+# ── Insights Command ──────────────────────────────────────────────────────
+
+@main.command()
+@click.option("--days", "-d", default=7, help="Number of days to analyze (default: 7)")
+def insights(days):
+    """🧠 AI-powered productivity digest and coaching insights."""
+    db.init_db()
+
+    from . import config as cfg
+    from .ai import generate_weekly_digest
+
+    provider, api_key, model = cfg.get_ai_config()
+    if not api_key:
+        console.print("\n[red]No API key configured. Run: tracecli config --key YOUR_KEY[/red]")
+        console.print("[dim]Supports: gemini, openai, claude[/dim]\n")
+        return
+
+    console.print()
+    console.print(Panel(
+        f"[bold bright_white]🧠 AI Productivity Insights[/bold bright_white]\n"
+        f"[dim]Analyzing the past {days} days with {provider}...[/dim]",
+        border_style="bright_cyan",
+        expand=False,
+    ))
+
+    with console.status("[bright_cyan]Generating your personalized digest...[/bright_cyan]"):
+        digest = generate_weekly_digest(days)
+
+    if not digest:
+        console.print("\n[yellow]Could not generate insights. Check your API key and try again.[/yellow]\n")
+        return
+
+    console.print()
+    console.print(Panel(
+        digest,
+        title="[bold bright_white]📊 Your Productivity Digest[/bold bright_white]",
+        border_style="bright_green",
+        padding=(1, 2),
+    ))
+    console.print()
+
+
+# ── Focus Command ─────────────────────────────────────────────────────────
+
+@main.command()
+@click.option("--duration", "-d", default=25, help="Focus duration in minutes (default: 25)")
+@click.option("--goal", "-g", default="", help="Label for this focus session")
+def focus(duration, goal):
+    """🎯 Start a Pomodoro-style focus session with distraction detection."""
+    db.init_db()
+
+    console.print()
+    console.print(Panel(
+        f"[bold bright_white]🎯 Focus Mode[/bold bright_white]\n"
+        f"[dim]Duration: {duration} min{' | Goal: ' + goal if goal else ''}[/dim]",
+        border_style="bright_magenta",
+        expand=False,
+    ))
+
+    distraction_alerts = []
+
+    def on_distraction(app, title, category):
+        emoji = get_category_emoji(category)
+        alert = f"{emoji} Distraction: {app} — {truncate(title, 40)}"
+        distraction_alerts.append(alert)
+
+    def on_complete(session):
+        pass  # Handled below
+
+    monitor = FocusMonitor(
+        target_minutes=duration,
+        goal_label=goal,
+        poll_interval=1.0,
+        on_distraction=on_distraction,
+        on_complete=on_complete,
+    )
+
+    monitor.start()
+    console.print("[dim]Press Ctrl+C to end the session early.[/dim]\n")
+
+    try:
+        with Live(console=console, refresh_per_second=1) as live:
+            while monitor._running:
+                session = monitor.session
+                if not session:
+                    time.sleep(0.5)
+                    continue
+
+                remaining = session.remaining_seconds
+                mins, secs = divmod(int(remaining), 60)
+                elapsed = session.focused_seconds + session.distracted_seconds
+                elapsed_mins, elapsed_secs = divmod(int(elapsed), 60)
+
+                # Build the live display
+                focus_text = Text()
+
+                # Timer
+                focus_text.append(f"  ⏱  ", style="bold bright_cyan")
+                focus_text.append(f"{mins:02d}:{secs:02d}", style="bold bright_white")
+                focus_text.append(f" remaining", style="dim")
+                focus_text.append(f"   ({elapsed_mins:02d}:{elapsed_secs:02d} elapsed)\n", style="dim")
+
+                # Score bar
+                score = session.focus_score
+                score_color = "green" if score >= 80 else "yellow" if score >= 60 else "red"
+                bar_len = 30
+                filled = int(score / 100 * bar_len)
+                bar = "█" * filled + "░" * (bar_len - filled)
+                focus_text.append(f"  📊 Focus: ", style="dim")
+                focus_text.append(f"{bar} {score:.0f}%\n", style=score_color)
+
+                # Interruptions
+                focus_text.append(f"  ⚡ Interruptions: ", style="dim")
+                int_count = len(session.interruptions)
+                int_color = "green" if int_count == 0 else "yellow" if int_count <= 3 else "red"
+                focus_text.append(f"{int_count}\n", style=f"bold {int_color}")
+
+                # Recent distraction alerts
+                if distraction_alerts:
+                    focus_text.append(f"\n")
+                    for alert in distraction_alerts[-3:]:
+                        focus_text.append(f"  ⚠  {alert}\n", style="bold red")
+
+                panel = Panel(
+                    focus_text,
+                    title="[bold bright_magenta]🎯 Focus Mode Active[/bold bright_magenta]",
+                    border_style="bright_magenta",
+                    expand=False,
+                    width=60,
+                )
+                live.update(panel)
+                time.sleep(1)
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        session = monitor.stop()
+
+    if session:
+        # Final summary
+        console.print()
+        score = session.focus_score
+        score_color = "green" if score >= 80 else "yellow" if score >= 60 else "red"
+
+        grade = "🏆 Excellent!" if score >= 90 else "✅ Good" if score >= 70 else "⚠️ Needs work" if score >= 50 else "❌ Too many distractions"
+
+        summary_table = Table(show_header=False, box=None, padding=(0, 2))
+        summary_table.add_column(style="dim")
+        summary_table.add_column(style="bold")
+
+        summary_table.add_row("Duration", format_duration(session.total_seconds))
+        summary_table.add_row("Focused time", format_duration(session.focused_seconds))
+        summary_table.add_row("Distracted time", format_duration(session.distracted_seconds))
+        summary_table.add_row("Interruptions", str(len(session.interruptions)))
+        summary_table.add_row("Focus Score", f"[{score_color}]{score:.1f}%[/{score_color}]")
+        summary_table.add_row("Grade", grade)
+        if goal:
+            summary_table.add_row("Goal", goal)
+
+        console.print(Panel(
+            summary_table,
+            title="[bold bright_white]📋 Session Complete[/bold bright_white]",
+            border_style="bright_cyan",
+            expand=False,
+        ))
+        console.print()
+
+
+@main.command(name="focus-history")
+@click.option("--date", "-d", "date_str", default=None, help="Filter by date (YYYY-MM-DD)")
+@click.option("--limit", "-n", default=10, help="Number of sessions to show")
+def focus_history(date_str, limit):
+    """📜 View past focus sessions."""
+    db.init_db()
+
+    target_date = parse_date(date_str) if date_str else None
+    sessions = db.query_focus_sessions(target_date, limit)
+
+    if not sessions:
+        console.print("\n[yellow]No focus sessions found. Try: tracecli focus[/yellow]\n")
+        return
+
+    # Stats
+    stats = db.get_focus_stats()
+
+    console.print()
+    console.print(Panel(
+        f"[bold bright_white]📜 Focus History[/bold bright_white]\n"
+        f"[dim]{stats['total_sessions']} sessions | "
+        f"Avg score: {stats['avg_focus_score']:.1f}% | "
+        f"Best: {stats['best_score']:.1f}%[/dim]",
+        border_style="bright_magenta",
+        expand=False,
+    ))
+
+    table = Table(box=box.SIMPLE_HEAVY)
+    table.add_column("Date", style="bright_cyan")
+    table.add_column("Time", style="dim")
+    table.add_column("Target", justify="right")
+    table.add_column("Focused", justify="right")
+    table.add_column("Score", justify="right")
+    table.add_column("Interruptions", justify="center")
+    table.add_column("Goal", style="dim")
+
+    for s in sessions:
+        score = s["focus_score"]
+        score_color = "green" if score >= 80 else "yellow" if score >= 60 else "red"
+        start = format_time(s["start_time"])
+        date_part = s["start_time"][:10] if s["start_time"] else ""
+
+        table.add_row(
+            date_part,
+            start,
+            f"{s['target_minutes']}m",
+            format_duration(s["actual_focus_seconds"]),
+            f"[{score_color}]{score:.0f}%[/{score_color}]",
+            str(s["interruption_count"]),
+            truncate(s["goal_label"], 20) if s["goal_label"] else "—",
+        )
+
+    console.print(table)
+    console.print()
+
+
+# ── Heatmap Command ────────────────────────────────────────────────────────
+
+@main.command()
+@click.option("--weeks", default=20, help="Number of weeks to display (default: 20)")
+def heatmap(weeks):
+    """📊 Display a GitHub-style productivity heatmap in the terminal."""
+    db.init_db()
+
+    heatmap_data = db.get_productivity_heatmap_data(weeks)
+    streak_info = db.get_streak_info()
+
+    # Build date → score lookup
+    score_map = {}
+    for entry in heatmap_data:
+        score_map[entry["date"]] = entry["score"]
+
+    # Color mapping: score → Rich color
+    def score_color(score, has_data):
+        if not has_data:
+            return "bright_black"
+        if score >= 80:
+            return "green"
+        elif score >= 60:
+            return "bright_green"
+        elif score >= 40:
+            return "yellow"
+        elif score >= 20:
+            return "dark_orange"
+        else:
+            return "red"
+
+    # Calculate date range
+    today = date.today()
+    # Start from the beginning of the week (Monday) for alignment
+    start = today - timedelta(days=today.weekday(), weeks=weeks - 1)
+
+    # Header
+    console.print()
+    console.print(Panel(
+        "[bold bright_white]📊 Productivity Heatmap[/bold bright_white]",
+        border_style="bright_cyan",
+        expand=False,
+    ))
+
+    # Day-of-week labels
+    day_labels = ["Mon", "   ", "Wed", "   ", "Fri", "   ", "Sun"]
+
+    # Generate the grid: 7 rows (Mon–Sun) × N columns (weeks)
+    total_days = weeks * 7
+    grid_dates = []
+    for i in range(total_days):
+        d = start + timedelta(days=i)
+        grid_dates.append(d)
+
+    # Build month labels row
+    month_text = Text("    ")  # Indent for day labels
+    prev_month = -1
+    for w in range(weeks):
+        col_date = start + timedelta(weeks=w)
+        if col_date.month != prev_month:
+            month_label = col_date.strftime("%b")
+            month_text.append(month_label)
+            # Pad remaining space for this month column
+            remaining = 2 - len(month_label) + 1
+            if remaining > 0:
+                month_text.append(" " * remaining)
+            prev_month = col_date.month
+        else:
+            month_text.append("  ")
+    console.print(month_text)
+
+    # Build the heatmap rows (one per day of week)
+    for day_idx in range(7):
+        row = Text()
+        row.append(f"{day_labels[day_idx]} ", style="dim")
+        for w in range(weeks):
+            cell_idx = w * 7 + day_idx
+            if cell_idx < len(grid_dates):
+                d = grid_dates[cell_idx]
+                if d > today:
+                    row.append("  ", style="bright_black")
+                else:
+                    date_str = d.isoformat()
+                    has_data = date_str in score_map
+                    score = score_map.get(date_str, 0)
+                    color = score_color(score, has_data)
+                    row.append("█ ", style=color)
+            else:
+                row.append("  ")
+        console.print(row)
+
+    # Legend
+    console.print()
+    legend = Text("    Less ")
+    legend.append("█ ", style="bright_black")
+    legend.append("█ ", style="red")
+    legend.append("█ ", style="dark_orange")
+    legend.append("█ ", style="yellow")
+    legend.append("█ ", style="bright_green")
+    legend.append("█ ", style="green")
+    legend.append(" More")
+    console.print(legend)
+
+    # Streak info
+    console.print()
+    streak_text = Text("    ")
+    streak_text.append(f"🔥 Current streak: ", style="dim")
+    streak_text.append(f"{streak_info['current_streak']} days", style="bold bright_yellow")
+    streak_text.append(f"   🏆 Longest: ", style="dim")
+    streak_text.append(f"{streak_info['longest_streak']} days", style="bold bright_cyan")
+    streak_text.append(f"   📅 Total: ", style="dim")
+    streak_text.append(f"{streak_info['total_days_tracked']} days tracked", style="bold")
+    console.print(streak_text)
+    console.print()
+
+
+# ── Week Command ──────────────────────────────────────────────────────────
+
+@main.command()
+def week():
+    """📅 Show a quick weekly productivity summary."""
+    db.init_db()
+
+    stats_list = db.get_stats_range(7)
+
+    if not stats_list:
+        console.print("\n[yellow]No data for the past week. Start tracking first![/yellow]\n")
+        return
+
+    total_seconds = sum(s["total_seconds"] for s in stats_list)
+    productive_seconds = sum(s["productive_seconds"] for s in stats_list)
+    distraction_seconds = sum(s["distraction_seconds"] for s in stats_list)
+    avg_score = round((productive_seconds / total_seconds) * 100) if total_seconds > 0 else 0
+
+    # Find best and worst days
+    best = max(stats_list, key=lambda s: s["productive_seconds"])
+    worst = min(stats_list, key=lambda s: (s["productive_seconds"] / s["total_seconds"]) if s["total_seconds"] > 0 else 1)
+
+    console.print()
+    console.print(Panel(
+        "[bold bright_white]📅 Weekly Summary[/bold bright_white]",
+        border_style="bright_cyan",
+        expand=False,
+    ))
+
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column(style="dim")
+    table.add_column(style="bold")
+
+    table.add_row("Total tracked time", format_duration(total_seconds))
+    table.add_row("Productive time", format_duration(productive_seconds))
+    table.add_row("Distraction time", format_duration(distraction_seconds))
+    table.add_row("Avg. productivity", f"{avg_score}%")
+    table.add_row("Days tracked", f"{len(stats_list)}")
+    table.add_row("Best day", f"{best['date']} ({format_duration(best['productive_seconds'])} productive)")
+    table.add_row("Worst day", f"{worst['date']}")
+
+    console.print(table)
+    console.print()
+
+
 # ── Entry Point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     main()
+
