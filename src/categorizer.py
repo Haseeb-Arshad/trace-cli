@@ -6,6 +6,7 @@ Rule-based engine that classifies window activity into productivity categories.
 
 import re
 from typing import Tuple
+from . import config
 
 # ── Category Definitions ───────────────────────────────────────────────────
 
@@ -164,6 +165,19 @@ PRODUCTIVITY_TITLE_PATTERNS = [
 
 # ── Main Categorizer ──────────────────────────────────────────────────────
 
+# ── User Configuration ────────────────────────────────────────────────────
+
+# Load rules once on module import
+USER_RULES = config.load_rules()
+
+def reload_rules():
+    """Reload user rules from disk."""
+    global USER_RULES
+    USER_RULES = config.load_rules()
+
+
+# ── Main Categorizer ──────────────────────────────────────────────────────
+
 def categorize(app_name: str, window_title: str) -> str:
     """
     Categorize an activity based on process name and window title.
@@ -171,18 +185,27 @@ def categorize(app_name: str, window_title: str) -> str:
     Returns a category string like "💻 Development" or "🎮 Distraction".
 
     Priority order:
-      1. Process-based dev tools (always productive)
-      2. Process-based communication apps
-      3. Process-based productivity apps
-      4. Process-based distraction apps
-      5. Browser → title-based sub-categorization
-      6. General title-based patterns
-      7. Fallback to "Other"
+      1. User-defined Productive processes
+      2. User-defined Distraction processes
+      3. Process-based dev tools (always productive)
+      4. Process-based communication apps
+      5. Process-based productivity apps
+      6. Process-based distraction apps
+      7. Browser → title-based sub-categorization
+      8. General title-based patterns
+      9. Fallback to "Other"
     """
     app_lower = app_name.lower().strip()
     title = window_title.strip()
 
-    # 1. Development tools (by process)
+    # 1. User Rules (Process-based)
+    if app_lower in USER_RULES.productive_processes:
+        return CATEGORIES["PRODUCTIVITY"]
+    
+    if app_lower in USER_RULES.distraction_processes:
+        return CATEGORIES["DISTRACTION"]
+
+    # 2. Development tools (by process)
     if app_lower in DEV_PROCESSES:
         return CATEGORIES["DEVELOPMENT"]
 
@@ -208,6 +231,16 @@ def categorize(app_name: str, window_title: str) -> str:
 
 def _categorize_browser_title(title: str) -> str:
     """Sub-categorize a browser window by its title."""
+    
+    # 0. User Rules (Keyword-based)
+    for keyword in USER_RULES.productive_keywords:
+        if keyword.lower() in title.lower():
+            return CATEGORIES["PRODUCTIVITY"]
+
+    for keyword in USER_RULES.distraction_keywords:
+        if keyword.lower() in title.lower():
+            return CATEGORIES["DISTRACTION"]
+
     # Check productivity patterns first (Google Docs, Notion, Jira, etc.)
     # Must come before research, as 'Google Docs' would match \bdocs\b
     for pattern in PRODUCTIVITY_TITLE_PATTERNS:
@@ -235,6 +268,16 @@ def _categorize_browser_title(title: str) -> str:
 
 def _categorize_by_title(title: str) -> str:
     """Last-resort title-based categorization for unknown processes."""
+    
+    # 0. User Rules (Keyword-based)
+    for keyword in USER_RULES.productive_keywords:
+        if keyword.lower() in title.lower():
+            return CATEGORIES["PRODUCTIVITY"]
+
+    for keyword in USER_RULES.distraction_keywords:
+        if keyword.lower() in title.lower():
+            return CATEGORIES["DISTRACTION"]
+
     for pattern in RESEARCH_TITLE_PATTERNS:
         if pattern.search(title):
             return CATEGORIES["RESEARCH"]
