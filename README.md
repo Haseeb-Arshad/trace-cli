@@ -117,7 +117,7 @@ graph TD
     
     subgraph "Intelligence"
         CLI --> AI
-        AI --> LLM[LLM Provider\n(Gemini/OpenAI/Claude)]
+        AI --> LLM["LLM Provider<br/>(Gemini/OpenAI/Claude)"]
     end
 ```
 
