@@ -4,7 +4,7 @@
 
 TraceCLI is a privacy-first, AI-powered activity tracker and productivity coach that lives in your terminal. It monitors your digital habits, actively protects your focus, and provides AI-powered coaching to improve your workflow—all without your data ever leaving your machine.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/Haseeb-Arshad/trace-cli/blob/main/LICENSE)
 [![GitHub Repository](https://img.shields.io/badge/GitHub-trace--cli-blue.svg?logo=github)](https://github.com/Haseeb-Arshad/trace-cli)
 
 ## Why TraceCLI?
@@ -106,4 +106,4 @@ We welcome contributions! Please see `CONTRIBUTING.md` for details on how to get
 
 ## License
 
-TraceCLI is released under the [MIT License](LICENSE).
+TraceCLI is released under the [MIT License](https://github.com/Haseeb-Arshad/trace-cli/blob/main/LICENSE).

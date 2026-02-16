@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tracecli"
-version = "0.1.0"
+version = "0.1.2"
 description = "The terminal's black box for your digital life. A privacy-first activity monitor."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -30,6 +30,7 @@ dependencies = [
 Homepage = "https://github.com/Haseeb-Arshad/trace-cli"
 Repository = "https://github.com/Haseeb-Arshad/trace-cli"
 Issues = "https://github.com/Haseeb-Arshad/trace-cli/issues"
+License = "https://github.com/Haseeb-Arshad/trace-cli/blob/main/LICENSE"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov"]
