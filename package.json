@@ -1,0 +1,34 @@
+{
+  "name": "tracecli",
+  "version": "0.1.2",
+  "description": "The terminal's black box for your digital life. A privacy-first activity monitor.",
+  "main": "bin/tracecli.js",
+  "bin": {
+    "tracecli": "bin/tracecli.js"
+  },
+  "scripts": {
+    "postinstall": "pip install tracecli",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Haseeb-Arshad/trace-cli.git"
+  },
+  "keywords": [
+    "productivity",
+    "tracker",
+    "cli",
+    "windows",
+    "privacy",
+    "python"
+  ],
+  "author": "Haseeb Arshad",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Haseeb-Arshad/trace-cli/issues"
+  },
+  "homepage": "https://github.com/Haseeb-Arshad/trace-cli#readme",
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

@@ -60,7 +60,14 @@ def enable_autostart() -> tuple[bool, str]:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     # Write the VBS launcher script
-    VBS_PATH.write_text(VBS_CONTENT, encoding="utf-8")
+    vbs_script = (
+        "' TraceCLI Silent Launcher\n"
+        "' Launches tracecli start in background with no visible console window.\n"
+        "Set WshShell = CreateObject(\"WScript.Shell\")\n"
+        f"WshShell.Run \"\"\"{tracecli_path}\"\" start\", 0, False\n"
+        "Set WshShell = Nothing\n"
+    )
+    VBS_PATH.write_text(vbs_script, encoding="utf-8")
 
     # Create the Registry Run key
     try:
@@ -138,13 +145,51 @@ def is_autostart_enabled() -> bool:
         return False
 
 
+def is_autostart_valid() -> tuple[bool, str]:
+    """
+    Check if the existing auto-start configuration is valid and points
+    to the current Python-based tracecli executable.
+
+    Returns:
+        (is_valid, reason)
+    """
+    if not is_autostart_enabled():
+        return False, "Autostart is not enabled in Registry."
+
+    if not VBS_PATH.exists():
+        return False, f"VBS launcher script not found at {VBS_PATH}."
+
+    # Check VBS content
+    try:
+        content = VBS_PATH.read_text(encoding="utf-8")
+        current_tracecli = shutil.which("tracecli")
+        
+        if not current_tracecli:
+            return False, "Current tracecli executable not found in PATH."
+
+        # If it points to an NPM version (AppData\Roaming\npm), it's invalid
+        if "AppData\\Roaming\\npm" in content:
+            return False, "VBS script points to a legacy NPM version of tracecli."
+
+        # If it doesn't contain the current executable path, it's invalid
+        if current_tracecli.lower() not in content.lower():
+            return False, f"VBS script points to a different executable path."
+
+        return True, "Autostart configuration is valid."
+    except Exception as e:
+        return False, f"Failed to read/validate VBS script: {e}"
+
+
 def get_autostart_info() -> dict:
     """Get detailed info about the auto-start configuration."""
     enabled = is_autostart_enabled()
     vbs_exists = VBS_PATH.exists()
+    valid, reason = is_autostart_valid()
 
     info = {
         "enabled": enabled,
+        "valid": valid,
+        "reason": reason,
         "registry_path": f"HKCU\\{REGISTRY_KEY_PATH}",
         "registry_value": REGISTRY_VALUE_NAME,
         "vbs_path": str(VBS_PATH),

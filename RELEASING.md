@@ -63,3 +63,31 @@ Once uploaded, users can install it via:
 ```powershell
 pip install tracecli
 ```
+
+---
+
+# Releasing TraceCLI to NPM
+
+TraceCLI is also distributed on NPM as a wrapper around the Python package.
+
+## Step 1: Ensure package.json version matches PyPI
+
+Check `package.json`:
+```json
+"version": "0.1.2"
+```
+
+## Step 2: Login to NPM
+
+```powershell
+npm login
+```
+
+## Step 3: Publish to NPM
+
+```powershell
+npm publish
+```
+
+> [!NOTE]
+> The NPM package uses a `postinstall` script to run `pip install tracecli`. Ensure your PyPI release is live before publishing to NPM.

@@ -224,9 +224,11 @@ def show_dashboard():
 def start(poll_interval, min_duration, sync_searches, snapshot_interval, background):
     """Start background activity tracking with live dashboard."""
     if background:
-        # Check if VBS launcher exists, if not create it (enables autostart too)
-        if not autostart_mod.VBS_PATH.exists():
-            console.print("[yellow]Creating background launcher...[/yellow]")
+        # Check if autostart is valid, if not (or not exists), create/fix it
+        is_valid, reason = autostart_mod.is_autostart_valid()
+        if not is_valid:
+            console.print(f"[yellow]Auto-start configuration issue detected: {reason}[/yellow]")
+            console.print("[yellow]Repairing background launcher...[/yellow]")
             autostart_mod.enable_autostart()
         
         console.print(f"[green]🚀 Launching TraceCLI in background...[/green]")
@@ -1338,7 +1340,11 @@ def autostart(action):
         status_table.add_column("Value")
 
         if info["enabled"]:
-            status_table.add_row("Status", "[bold green]✅ Enabled[/bold green]")
+            status_style = "bold green" if info["valid"] else "bold yellow"
+            status_text = "✅ Enabled" if info["valid"] else "⚠️ Invalid/Legacy"
+            status_table.add_row("Status", f"[{status_style}]{status_text}[/{status_style}]")
+            if not info["valid"]:
+                status_table.add_row("Reason", f"[yellow]{info['reason']}[/yellow]")
         else:
             status_table.add_row("Status", "[dim]❌ Disabled[/dim]")
 
