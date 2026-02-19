@@ -1638,9 +1638,16 @@ def focus_history(date_str, limit):
 
 @main.command()
 @click.option("--weeks", default=20, help="Number of weeks to display (default: 20)")
-def heatmap(weeks):
-    """Display a GitHub-style productivity heatmap in the terminal."""
+@click.option("--day", "-d", "date_str", is_flag=False, flag_value="today", help="Show hourly heatmap for a specific day (default: today)")
+@click.option("--app", "-a", multiple=True, help="Filter by specific apps (for --day view)")
+def heatmap(weeks, date_str, app):
+    """Display a productivity heatmap (weekly or daily hourly)."""
     db.init_db()
+
+    if date_str:
+        target = parse_date(None if date_str == "today" else date_str)
+        _show_daily_heatmap(target, list(app) if app else None)
+        return
 
     heatmap_data = db.get_productivity_heatmap_data(weeks)
     streak_info = db.get_streak_info()
@@ -1747,6 +1754,157 @@ def heatmap(weeks):
     streak_text.append(f"   📅 Total: ", style="dim")
     streak_text.append(f"{streak_info['total_days_tracked']} days tracked", style="bold")
     console.print(streak_text)
+    console.print()
+
+
+def _show_daily_heatmap(target_date: date, apps: list[str] = None):
+    """Display an hourly usage heatmap for a specific day."""
+    data = db.get_daily_app_usage_by_hour(target_date, apps)
+    
+    if not data:
+        console.print(f"\n[yellow]No activity data for {target_date}.[/yellow]\n")
+        return
+
+    # Pivot data: App Name -> [duration per hour (0-23)]
+    usage_map = {}
+    hours_tracked = set()
+    for entry in data:
+        app = entry["app_name"]
+        hour = int(entry["hour"])
+        duration = entry["total_seconds"]
+        if app not in usage_map:
+            usage_map[app] = [0] * 24
+        usage_map[app][hour] = duration
+        hours_tracked.add(hour)
+
+    # Sort apps by total duration
+    sorted_apps = sorted(usage_map.items(), key=lambda x: sum(x[1]), reverse=True)[:15]
+
+    console.print()
+    console.print(Panel(
+        f"[bold bright_white]📊 Hourly Activity Heatmap — {target_date}[/bold bright_white]",
+        border_style="bright_cyan",
+        expand=False,
+    ))
+
+    # Header (Hours)
+    header = Text(" " * 22)
+    for h in range(24):
+        if h in hours_tracked:
+            header.append(f"{h:02d} ", style="dim")
+        else:
+            header.append(".. ", style="bright_black")
+    console.print(header)
+
+    def duration_color(seconds):
+        if seconds == 0: return "bright_black"
+        if seconds > 1800: return "green"   # > 30m
+        if seconds > 900:  return "bright_green" # > 15m
+        if seconds > 300:  return "yellow"  # > 5m
+        return "red"
+
+    for app_name, hourly_stats in sorted_apps:
+        row = Text(f"{truncate(app_name, 20):<20} ", style="bold")
+        for seconds in hourly_stats:
+            color = duration_color(seconds)
+            char = "█ " if seconds > 0 else "░ "
+            row.append(char, style=color)
+        console.print(row)
+
+    console.print()
+    console.print("[dim]  Legend: [red]█[/red] <5m  [yellow]█[/yellow] <15m  [bright_green]█[/bright_green] <30m  [green]█[/green] >30m[/dim]")
+    console.print()
+
+
+# ── Timeline Command ──────────────────────────────────────────────────────
+
+@main.command()
+@click.option("--date", "-d", "date_str", default=None, help="Date (YYYY-MM-DD)")
+def timeline(date_str):
+    """View a chronological timeline of your activities."""
+    target = parse_date(date_str)
+    db.init_db()
+
+    activities = db.get_daily_activity_timeline(target)
+    if not activities:
+        console.print(f"\n[yellow]No activities found for {target}.[/yellow]\n")
+        return
+
+    console.print()
+    console.print(Panel(
+        f"[bold bright_white]⏳ Activity Timeline — {target}[/bold bright_white]",
+        border_style="bright_magenta",
+        expand=False,
+    ))
+
+    table = Table(box=box.SIMPLE_HEAVY, show_header=True)
+    table.add_column("Time", style="dim", width=12)
+    table.add_column("Duration", justify="right", width=10)
+    table.add_column("Application", style="bold cyan", width=20)
+    table.add_column("Activity / Window Title", style="white")
+
+    for act in activities:
+        start = format_time(act["start_time"])
+        duration = format_duration(act["duration_seconds"])
+        app = act["app_name"]
+        title = truncate(act["window_title"], 60)
+        
+        table.add_row(start, duration, app, title)
+
+    console.print(table)
+    console.print()
+
+
+# ── App Distribution Command ──────────────────────────────────────────────
+
+@main.command(name="app-dist")
+@click.argument("app_name")
+@click.option("--days", "-n", default=30, help="Analyze last N days")
+def app_distribution(app_name, days):
+    """View the typical usage distribution of an app over the day."""
+    db.init_db()
+    data = db.get_app_usage_distribution(app_name, days)
+
+    if not data:
+        console.print(f"\n[yellow]No data found for [bold]{app_name}[/bold] in the last {days} days.[/yellow]\n")
+        return
+
+    # Map hours
+    hours_map = {int(d["hour"]): d["avg_seconds"] for d in data}
+    max_avg = max(hours_map.values()) if hours_map else 1
+
+    console.print()
+    console.print(Panel(
+        f"[bold bright_white]📈 '{app_name}' Usage Distribution (Avg over {days} days)[/bold bright_white]",
+        border_style="bright_yellow",
+        expand=False,
+    ))
+
+    def get_color(val):
+        pct = val / max_avg
+        if pct > 0.8: return "green"
+        if pct > 0.5: return "bright_green"
+        if pct > 0.2: return "yellow"
+        if pct > 0:   return "red"
+        return "bright_black"
+
+    # Heatmap row
+    row = Text("    ")
+    for h in range(24):
+        avg = hours_map.get(h, 0)
+        color = get_color(avg)
+        char = "█ " if avg > 0 else "░ "
+        row.append(char, style=color)
+    console.print(row)
+
+    # Hour labels row
+    labels = Text("    ")
+    for h in range(24):
+        labels.append(f"{h:02d} ", style="dim")
+    console.print(labels)
+
+    console.print()
+    console.print(f"  [dim]Peak usage at: [bold bright_white]{max(hours_map, key=hours_map.get):02d}:00[/bold bright_white][/dim]")
     console.print()
 
 

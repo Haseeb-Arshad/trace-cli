@@ -967,3 +967,74 @@ def get_focus_stats() -> dict:
         "total_interruptions": 0,
         "best_score": 0,
     }
+
+
+# ── Heatmap & Distribution Queries ──────────────────────────────────────────
+
+def get_daily_app_usage_by_hour(target_date: date, apps: list[str] = None) -> list[dict]:
+    """
+    Get app usage duration grouped by hour for a specific day.
+    Useful for 'Hourly Heatmap'.
+    """
+    conn = get_connection()
+    date_prefix = target_date.isoformat()
+    
+    query = """
+    SELECT 
+        strftime('%H', start_time) as hour,
+        app_name,
+        SUM(duration_seconds) as total_seconds
+    FROM activity_log
+    WHERE start_time LIKE ? || '%'
+    """
+    params = [date_prefix]
+    
+    if apps:
+        placeholders = ",".join("?" for _ in apps)
+        query += f" AND app_name IN ({placeholders})"
+        params.extend(apps)
+    
+    query += " GROUP BY hour, app_name ORDER BY hour ASC, total_seconds DESC"
+    
+    cursor = conn.execute(query, params)
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_daily_activity_timeline(target_date: date) -> list[dict]:
+    """Get a chronological list of activities for a specific day."""
+    conn = get_connection()
+    date_prefix = target_date.isoformat()
+    
+    cursor = conn.execute(
+        """
+        SELECT app_name, window_title, start_time, end_time, duration_seconds, category
+        FROM activity_log
+        WHERE start_time LIKE ? || '%'
+        ORDER BY start_time ASC
+        """,
+        (date_prefix,),
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_app_usage_distribution(app_name: str, days: int = 30) -> list[dict]:
+    """
+    Get usage distribution of an app by hour of day over the last N days.
+    Useful for 'App Distribution Heatmap'.
+    """
+    conn = get_connection()
+    start_date = date.today() - timedelta(days=days)
+    
+    cursor = conn.execute(
+        """
+        SELECT 
+            strftime('%H', start_time) as hour,
+            SUM(duration_seconds) / ? as avg_seconds
+        FROM activity_log
+        WHERE app_name = ? AND start_time >= ?
+        GROUP BY hour
+        ORDER BY hour ASC
+        """,
+        (days, app_name, start_date.isoformat()),
+    )
+    return [dict(row) for row in cursor.fetchall()]
