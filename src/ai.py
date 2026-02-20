@@ -9,11 +9,16 @@ import json
 import sqlite3
 import urllib.request
 import urllib.error
+import time
 from datetime import date
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.live import Live
+from rich.text import Text
+from rich.spinner import Spinner
+from rich import box
 
 from . import config
 from .database import get_connection, DB_PATH
@@ -226,7 +231,7 @@ def summarize_result(question: str, sql: str, rows: list, provider: str, api_key
 
 
 def handle_ask(question: str):
-    """Main entry point for 'tracecli ask'."""
+    """Main entry point for 'tracecli ask' with cool animations."""
     provider, api_key, model = config.get_ai_config()
     
     if not api_key:
@@ -234,43 +239,81 @@ def handle_ask(question: str):
         console.print(f"Run [bold]tracecli config --key YOUR_KEY[/bold] to set it up.")
         return
 
-    console.print(f"[dim]Thinking with {provider}...[/dim]")
+    # Cool animation sequence
+    ai_status_msgs = [
+        "Consulting the neural networks...",
+        "Searching your digital history...",
+        "Aggregating activity patterns...",
+        "Synthesizing insights...",
+        "Finalizing the answer..."
+    ]
     
-    # 1. Generate SQL
-    sql = generate_sql(question, provider, api_key, model)
-    if not sql:
-        console.print("[red]Failed to generate SQL query.[/red]")
-        return
-        
-    # Safety Check
-    if not sql.upper().startswith("SELECT"):
-        console.print("[red]Safety Violation: Generated SQL is not a SELECT statement.[/red]")
-        return
-        
-    console.print(f"[dim]Executing: {sql}[/dim]")
-    
-    # 2. Execute SQL
-    try:
-        conn = get_connection()
-        # Ensure read-only by using a cursor? sqlite3 doesn't easily enforce read-only per query
-        # But we checked for SELECT.
-        cursor = conn.execute(sql)
-        cols = [description[0] for description in cursor.description]
-        rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
-    except Exception as e:
-        console.print(f"[red]SQL Error: {e}[/red]")
-        return
+    with Live(refresh_per_second=10) as live:
+        def update_status(msg, spinner="dots"):
+            panel = Panel(
+                Text.from_markup(f"[bold bright_cyan]{msg}[/bold bright_cyan]"),
+                title="🤖 [bold]Trace AI[/bold]",
+                border_style="bright_blue",
+                box=box.ROUNDED,
+                expand=False
+            )
+            live.update(panel)
 
-    if not rows:
-        console.print("\n[yellow]No data found matching your query.[/yellow]\n")
-        return
+        # 1. Start thinking
+        update_status(ai_status_msgs[0])
+        
+        # 2. Generate SQL (Internal)
+        sql = generate_sql(question, provider, api_key, model)
+        if not sql:
+            live.stop()
+            console.print("[red]Failed to generate SQL query.[/red]")
+            return
+            
+        # Safety Check
+        if not sql.upper().startswith("SELECT"):
+            live.stop()
+            console.print("[red]Safety Violation: Generated SQL is not a SELECT statement.[/red]")
+            return
+            
+        update_status(ai_status_msgs[1])
+        time.sleep(0.5)
+        
+        # 3. Execute SQL (Internal)
+        try:
+            conn = get_connection()
+            cursor = conn.execute(sql)
+            cols = [description[0] for description in cursor.description]
+            rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            live.stop()
+            console.print(f"[red]SQL Error: {e}[/red]")
+            return
 
-    # 3. Summarize
-    console.print("[dim]Analyzing results...[/dim]")
-    answer = summarize_result(question, sql, rows, provider, api_key, model)
+        if not rows:
+            live.stop()
+            console.print("\n[yellow]No data found matching your query.[/yellow]\n")
+            return
+
+        update_status(ai_status_msgs[2])
+        time.sleep(0.5)
+
+        # 4. Summarize (Internal)
+        update_status(ai_status_msgs[3])
+        answer = summarize_result(question, sql, rows, provider, api_key, model)
+        
+        update_status(ai_status_msgs[4])
+        time.sleep(0.3)
     
+    # Final Presentation
     console.print()
-    console.print(Panel(answer, title="🤖 AI Answer", border_style="cyan"))
+    console.print(Panel(
+        answer,
+        title="🤖 [bold bright_white]AI Answer[/bold bright_white]",
+        subtitle=f"[dim]Powered by {provider.capitalize()}[/dim]",
+        border_style="bright_cyan",
+        padding=(1, 2),
+        box=box.DOUBLE_EDGE
+    ))
     console.print()
 
 

@@ -15,9 +15,9 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 RULES_PATH = CONFIG_DIR / "user_rules.json"
 
 DEFAULT_CONFIG = {
-    "ai_provider": "gemini",  # gemini, openai, claude
-    "ai_api_key": "",
-    "ai_model": "",  # Optional override
+    "provider": "gemini",  # gemini, openai, claude
+    "apiKey": "",
+    "model": "",  # Optional override
 }
 
 
@@ -40,6 +40,15 @@ def load_config() -> Dict[str, str]:
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
+            
+            # Migration logic: if old keys exist, map them to new ones
+            if "ai_provider" in data:
+                data["provider"] = data.pop("ai_provider")
+            if "ai_api_key" in data:
+                data["apiKey"] = data.pop("ai_api_key")
+            if "ai_model" in data:
+                data["model"] = data.pop("ai_model")
+                
             # Merge with defaults to ensure all keys exist
             return {**DEFAULT_CONFIG, **data}
     except (json.JSONDecodeError, OSError):
@@ -61,20 +70,20 @@ def save_config(config: Dict[str, str]):
 def get_ai_config() -> tuple[str, str, str]:
     """Get (provider, api_key, model)."""
     cfg = load_config()
-    return cfg.get("ai_provider", "gemini"), cfg.get("ai_api_key", ""), cfg.get("ai_model", "")
+    return cfg.get("provider", "gemini"), cfg.get("apiKey", ""), cfg.get("model", "")
 
 
 def set_ai_key(key: str):
     """Set the API key."""
     cfg = load_config()
-    cfg["ai_api_key"] = key
+    cfg["apiKey"] = key
     save_config(cfg)
 
 
 def set_ai_provider(provider: str):
     """Set the AI provider (gemini, openai, claude)."""
     cfg = load_config()
-    cfg["ai_provider"] = provider.lower()
+    cfg["provider"] = provider.lower()
     save_config(cfg)
 
 
